@@ -1,0 +1,22 @@
+[project]
+name = "solstone-linux"
+version = "0.1.0"
+description = "Standalone Linux desktop observer for solstone"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+    "numpy",
+    "soundfile",
+    "soundcard",
+    "dbus-next",
+    "PyGObject",
+]
+
+[project.scripts]
+solstone-linux = "solstone_linux.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
