@@ -17,6 +17,12 @@ dependencies = [
 [project.scripts]
 solstone-linux = "solstone_linux.cli:main"
 
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

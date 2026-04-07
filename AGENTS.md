@@ -1,0 +1,115 @@
+# AGENTS.md
+
+Development guidelines for solstone-linux, a standalone Linux desktop observer.
+
+## Project Overview
+
+solstone-linux is a companion app that runs alongside the main [solstone](https://solstone.app) journal. It captures screen recordings and audio from a Linux desktop using PipeWire and GStreamer, stores segments locally, and syncs them to a solstone server. It runs as a systemd user service on GNOME Wayland sessions.
+
+This is **not** part of the solstone monorepo. It is a standalone package with its own release lifecycle, installed via pipx alongside system-provided PyGObject/GStreamer bindings.
+
+## Source Layout
+
+```
+src/solstone_linux/
+    __init__.py             Package version
+    cli.py                  CLI entry point (run, setup, install-service, status)
+    config.py               Config loading/persistence (~/.local/share/solstone-linux/)
+    observer.py             Main capture loop — state machine (idle/screencast), audio + video
+    screencast.py           Portal-based multi-monitor recording (xdg-desktop-portal + GStreamer)
+    audio_recorder.py       Stereo audio recording (mic + system via soundcard)
+    audio_detect.py         Audio device detection via ultrasonic tone
+    audio_mute.py           PulseAudio mute state detection
+    activity.py             GNOME-specific activity detection (idle, screen lock, power save)
+    monitor_positions.py    Monitor position assignment from geometry
+    session_env.py          Desktop session environment checks and recovery
+    streams.py              Stream name derivation (hostname-based)
+    sync.py                 Background sync service — uploads completed segments to server
+    upload.py               HTTP upload client for solstone ingest server
+    recovery.py             Crash recovery for orphaned .incomplete segments
+
+tests/                      pytest test suite
+contrib/                    Reference systemd service unit
+```
+
+## Architecture
+
+The observer runs a single asyncio event loop with two concurrent concerns:
+
+1. **Capture loop** (`observer.py`) — Checks activity status every 5 seconds, records audio continuously, manages screencast recording via GStreamer. Creates 5-minute segments in `~/.local/share/solstone-linux/captures/YYYYMMDD/stream/HHMMSS_DDD/`. Segment directories start as `.incomplete` and are renamed on finalization.
+
+2. **Sync service** (`sync.py`) — Background asyncio task that walks the captures directory, queries the server for existing segments, and uploads missing ones. Circuit breaker pattern with error-type-aware thresholds.
+
+State machine has two modes: `screencast` (screen active, recording video) and `idle` (screen inactive). Mode transitions, mute state changes, and 5-minute intervals all trigger segment boundaries.
+
+The capture loop never makes network calls. It writes locally; sync handles all uploads.
+
+## Commands
+
+```bash
+make install        # Create venv, install package + dev tools (pytest, ruff) via uv
+make test           # Run all tests
+make test-only TEST=tests/test_config.py  # Run specific test
+make format         # Auto-format with ruff
+make ci             # Lint + format check + tests
+make clean          # Remove build artifacts and caches
+make versions       # Show installed package versions
+```
+
+## Development Principles
+
+- **Simple code.** Prefer plain functions over classes. Use dataclasses for structured data. Only use classes when managing stateful lifecycle (Observer, Screencaster, SyncService, AudioRecorder).
+- **Async by default.** The main loop is asyncio. DBus calls, subprocess management, and sync all use async. Audio recording uses a dedicated thread because soundcard is blocking.
+- **No network in the capture loop.** The observer writes segments locally. The sync service uploads asynchronously. This keeps capture reliable even when the server is down.
+- **Atomic directory operations.** Segments start as `HHMMSS.incomplete/`, are renamed to `HHMMSS_DDD/` on completion, or `HHMMSS.failed/` on recovery failure.
+- **System site-packages required.** PyGObject and GStreamer bindings come from system packages. The venv (and pipx) must use `--system-site-packages`.
+
+## File Headers
+
+All `.py` source files must include this header as the first two lines:
+
+```python
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2026 sol pbc
+```
+
+Add this header to new `.py` files in `src/solstone_linux/` and `tests/`. Do not add headers to markdown, TOML, or config files.
+
+## Runtime Dependencies
+
+System packages (not pip-installable):
+- `python3-gobject` / `python3-gi` — PyGObject for GTK4 and GDK
+- GStreamer with PipeWire plugin (`gst-launch-1.0 pipewiresrc`)
+- PipeWire running
+- `pactl` (PulseAudio utils) for mute detection
+- xdg-desktop-portal with ScreenCast support
+
+Python packages (in pyproject.toml):
+- `requests` — HTTP upload client
+- `numpy` — Audio buffer manipulation and RMS computation
+- `soundfile` — FLAC encoding
+- `soundcard` — Audio device enumeration and recording
+- `dbus-next` — Async DBus client for portal and activity detection
+- `PyGObject` — GDK monitor geometry (installed from system)
+
+## Data Paths
+
+- Config: `~/.local/share/solstone-linux/config/config.json`
+- Captures: `~/.local/share/solstone-linux/captures/`
+- State: `~/.local/share/solstone-linux/state/`
+- Restore token: `~/.local/share/solstone-linux/config/restore_token`
+
+## Key Patterns
+
+- **Activity detection is GNOME-specific.** Uses Mutter IdleMonitor, GNOME ScreenSaver, and Mutter DisplayConfig DBus interfaces. Other desktops capture screen and audio but won't get activity-based segment boundaries.
+- **Audio is stereo-interleaved.** Left channel = microphone, right channel = system audio. When muted, channels are split into separate mono FLAC files.
+- **Screencast uses xdg-desktop-portal.** Session persistence via restore tokens avoids re-prompting the user. GStreamer subprocess (`gst-launch-1.0`) handles the actual PipeWire recording.
+- **Crash recovery runs on startup.** `recovery.py` scans for orphaned `.incomplete` directories older than 2 minutes and finalizes or marks them as failed.
+
+## Testing
+
+Tests use pytest with standard mocking. No system dependencies required for tests — audio devices, DBus, and GStreamer are mocked. Run `make test` to execute the full suite.
+
+## License
+
+AGPL-3.0-only -- Copyright (c) 2026 sol pbc
