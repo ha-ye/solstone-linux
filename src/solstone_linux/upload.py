@@ -84,7 +84,7 @@ class UploadClient:
         if sol:
             try:
                 result = subprocess.run(
-                    [sol, "remote", "--json", "create", name],
+                    [sol, "observer", "--json", "create", name],
                     capture_output=True, text=True, timeout=10,
                 )
                 if result.returncode == 0:
@@ -99,7 +99,7 @@ class UploadClient:
         if not self._url:
             return False
 
-        url = f"{self._url}/app/remote/api/create"
+        url = f"{self._url}/app/observer/api/create"
 
         retries = min(3, len(self._retry_backoff))
         for attempt in range(retries):
@@ -155,7 +155,7 @@ class UploadClient:
         if self._revoked or not self._key or not self._url:
             return UploadResult(False, error_type=ErrorType.AUTH if self._revoked else None)
 
-        url = f"{self._url}/app/remote/ingest/{self._key}"
+        url = f"{self._url}/app/observer/ingest/{self._key}"
 
         for attempt in range(self._max_retries):
             file_handles = []
@@ -233,7 +233,7 @@ class UploadClient:
         if self._revoked or not self._key or not self._url:
             return None
 
-        url = f"{self._url}/app/remote/ingest/{self._key}/segments/{day}"
+        url = f"{self._url}/app/observer/ingest/{self._key}/segments/{day}"
         params = {}
         if self._stream:
             params["stream"] = self._stream
@@ -258,7 +258,7 @@ class UploadClient:
         if self._revoked or not self._key or not self._url:
             return False
 
-        url = f"{self._url}/app/remote/ingest/{self._key}/event"
+        url = f"{self._url}/app/observer/ingest/{self._key}/event"
         payload = {"tract": tract, "event": event, **fields}
         try:
             resp = self._session.post(url, json=payload, timeout=EVENT_TIMEOUT)

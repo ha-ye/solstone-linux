@@ -8,7 +8,7 @@ needed by standalone observers.
 
 Naming convention (separator is '.'):
     Local Linux:  {hostname}         e.g. "archon"
-    Remote:       {remote_name}      e.g. "desktop"
+    Observer:     {observer_name}    e.g. "desktop"
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _strip_hostname(name: str) -> str:
 def stream_name(
     *,
     host: str | None = None,
-    remote: str | None = None,
+    observer: str | None = None,
     qualifier: str | None = None,
 ) -> str:
     """Derive canonical stream name from source characteristics.
@@ -49,8 +49,8 @@ def stream_name(
     ----------
     host : str, optional
         Local hostname (e.g., "archon").
-    remote : str, optional
-        Remote observer name (e.g., "desktop").
+    observer : str, optional
+        Observer name (e.g., "desktop").
     qualifier : str, optional
         Sub-stream qualifier. Appended with dot separator.
 
@@ -66,10 +66,10 @@ def stream_name(
     """
     if host:
         base = _strip_hostname(host)
-    elif remote:
-        base = _strip_hostname(remote)
+    elif observer:
+        base = _strip_hostname(observer)
     else:
-        raise ValueError("stream_name requires host or remote")
+        raise ValueError("stream_name requires host or observer")
 
     name = base.lower().strip()
     name = re.sub(r"[\s/\\]+", "-", name)

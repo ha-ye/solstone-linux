@@ -34,8 +34,8 @@ class TestStreamName:
         # Linux observer uses host without qualifier
         assert stream_name(host="archon") == "archon"
 
-    def test_remote(self):
-        assert stream_name(remote="desktop") == "desktop"
+    def test_observer(self):
+        assert stream_name(observer="desktop") == "desktop"
 
     def test_rejects_empty(self):
         with pytest.raises(ValueError):
