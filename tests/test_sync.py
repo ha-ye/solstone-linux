@@ -5,18 +5,22 @@ import json
 import os
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from solstone_linux.config import Config
 from solstone_linux.recovery import recover_incomplete_segments
-from solstone_linux.upload import ErrorType, UploadClient, UploadResult
+from solstone_linux.upload import ErrorType, UploadClient
 
 
 class TestRecovery:
     """Test crash recovery for incomplete segments."""
 
     def _make_incomplete(
-        self, captures_dir: Path, day: str, stream: str, time_prefix: str, age: int = 300
+        self,
+        captures_dir: Path,
+        day: str,
+        stream: str,
+        time_prefix: str,
+        age: int = 300,
     ) -> Path:
         """Create an incomplete segment directory with a dummy file."""
         seg_dir = captures_dir / day / stream / f"{time_prefix}.incomplete"
@@ -161,6 +165,7 @@ class TestSyncedDaysPruning:
 
         # Add entries spanning 100 days
         from datetime import datetime, timedelta
+
         today = datetime.now()
         for i in range(100):
             day = (today - timedelta(days=i)).strftime("%Y%m%d")
@@ -188,7 +193,10 @@ class TestErrorClassification:
         assert UploadClient.classify_error(503) == ErrorType.TRANSIENT
 
     def test_network_errors(self):
-        assert UploadClient.classify_error(None, is_network_error=True) == ErrorType.TRANSIENT
+        assert (
+            UploadClient.classify_error(None, is_network_error=True)
+            == ErrorType.TRANSIENT
+        )
 
     def test_unknown_status(self):
         assert UploadClient.classify_error(418) == ErrorType.TRANSIENT

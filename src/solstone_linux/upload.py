@@ -34,9 +34,10 @@ EVENT_TIMEOUT = 30
 
 class ErrorType(Enum):
     """Classification of upload errors for circuit breaker tuning."""
-    AUTH = "auth"           # 401, 403 — open circuit immediately
-    CLIENT = "client"       # 400 — non-retryable, don't count for circuit
-    TRANSIENT = "transient" # 5xx, network, timeout — allow more failures
+
+    AUTH = "auth"  # 401, 403 — open circuit immediately
+    CLIENT = "client"  # 400 — non-retryable, don't count for circuit
+    TRANSIENT = "transient"  # 5xx, network, timeout — allow more failures
 
 
 class UploadResult(NamedTuple):
@@ -85,7 +86,9 @@ class UploadClient:
             try:
                 result = subprocess.run(
                     [sol, "observer", "--json", "create", name],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
                     data = json.loads(result.stdout)
@@ -93,7 +96,12 @@ class UploadClient:
                     self._persist_key(config, self._key)
                     logger.info(f"CLI-registered as '{name}' (key: {self._key[:8]}...)")
                     return True
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError) as e:
+            except (
+                subprocess.TimeoutExpired,
+                json.JSONDecodeError,
+                KeyError,
+                OSError,
+            ) as e:
                 logger.debug(f"CLI registration failed: {e}")
 
         if not self._url:
@@ -112,7 +120,9 @@ class UploadClient:
                     data = resp.json()
                     self._key = data["key"]
                     self._persist_key(config, self._key)
-                    logger.info(f"Auto-registered as '{name}' (key: {self._key[:8]}...)")
+                    logger.info(
+                        f"Auto-registered as '{name}' (key: {self._key[:8]}...)"
+                    )
                     return True
                 elif resp.status_code == 403:
                     self._revoked = True
@@ -131,7 +141,9 @@ class UploadClient:
         return False
 
     @staticmethod
-    def classify_error(status_code: int | None, is_network_error: bool = False) -> ErrorType:
+    def classify_error(
+        status_code: int | None, is_network_error: bool = False
+    ) -> ErrorType:
         """Classify an error for circuit breaker and retry decisions."""
         if is_network_error:
             return ErrorType.TRANSIENT
@@ -153,7 +165,9 @@ class UploadClient:
     ) -> UploadResult:
         """Upload a segment's files to the ingest server."""
         if self._revoked or not self._key or not self._url:
-            return UploadResult(False, error_type=ErrorType.AUTH if self._revoked else None)
+            return UploadResult(
+                False, error_type=ErrorType.AUTH if self._revoked else None
+            )
 
         url = f"{self._url}/app/observer/ingest/{self._key}"
 
@@ -222,7 +236,9 @@ class UploadClient:
                 delay = self._retry_backoff[min(attempt, len(self._retry_backoff) - 1)]
                 time.sleep(delay)
 
-        logger.error(f"Upload failed after {self._max_retries} attempts: {day}/{segment}")
+        logger.error(
+            f"Upload failed after {self._max_retries} attempts: {day}/{segment}"
+        )
         return UploadResult(False, error_type=error_type)
 
     def get_server_segments(self, day: str) -> list[dict] | None:

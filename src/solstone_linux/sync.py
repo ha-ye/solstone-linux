@@ -30,7 +30,7 @@ from .upload import ErrorType, UploadClient
 logger = logging.getLogger(__name__)
 
 # Circuit breaker thresholds by error type
-CIRCUIT_THRESHOLD_AUTH = 1       # Auth failures open immediately
+CIRCUIT_THRESHOLD_AUTH = 1  # Auth failures open immediately
 CIRCUIT_THRESHOLD_TRANSIENT = 5  # Transient failures need 5 consecutive
 
 # Synced days older than this are pruned from the cache
@@ -84,12 +84,16 @@ class SyncService:
         """Remove synced-days entries older than 90 days."""
         if not self._synced_days:
             return
-        cutoff = (datetime.now() - timedelta(days=SYNCED_DAYS_MAX_AGE)).strftime("%Y%m%d")
+        cutoff = (datetime.now() - timedelta(days=SYNCED_DAYS_MAX_AGE)).strftime(
+            "%Y%m%d"
+        )
         before = len(self._synced_days)
         self._synced_days = {d for d in self._synced_days if d >= cutoff}
         pruned = before - len(self._synced_days)
         if pruned:
-            logger.info(f"Pruned {pruned} synced-days entries older than {SYNCED_DAYS_MAX_AGE} days")
+            logger.info(
+                f"Pruned {pruned} synced-days entries older than {SYNCED_DAYS_MAX_AGE} days"
+            )
             self._save_synced_days()
 
     def _circuit_threshold(self) -> int:

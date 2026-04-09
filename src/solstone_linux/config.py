@@ -33,7 +33,9 @@ class Config:
     key: str = ""
     stream: str = ""
     segment_interval: int = DEFAULT_SEGMENT_INTERVAL
-    sync_retry_delays: list[int] = field(default_factory=lambda: list(DEFAULT_SYNC_RETRY_DELAYS))
+    sync_retry_delays: list[int] = field(
+        default_factory=lambda: list(DEFAULT_SYNC_RETRY_DELAYS)
+    )
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
     base_dir: Path = DEFAULT_BASE_DIR
 

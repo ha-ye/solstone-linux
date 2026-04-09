@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import Config, load_config, save_config
+from .config import load_config, save_config
 from .streams import stream_name
 
 
@@ -100,7 +100,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
             try:
                 result = subprocess.run(
                     [sol, "observer", "--json", "create", config.stream],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
                     data = json.loads(result.stdout)
@@ -108,7 +110,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                     save_config(config)
                     print(f"Registered (key: {config.key[:8]}...)")
                 else:
-                    print(f"CLI registration failed, trying HTTP...")
+                    print("CLI registration failed, trying HTTP...")
             except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
                 print("CLI registration failed, trying HTTP...")
 
@@ -119,13 +121,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 config = load_config()
                 print(f"Registered (key: {config.key[:8]}...)")
             else:
-                print("Warning: registration failed. Run setup again when server is available.")
+                print(
+                    "Warning: registration failed. Run setup again when server is available."
+                )
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
 
     print(f"\nConfig saved to {config.config_path}")
     print(f"Captures will go to {config.captures_dir}")
-    print(f"\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd.")
+    print(
+        "\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd."
+    )
     return 0
 
 
@@ -134,7 +140,10 @@ def cmd_install_service(args: argparse.Namespace) -> int:
     binary = shutil.which("solstone-linux")
     if not binary:
         print("Error: solstone-linux not found on PATH", file=sys.stderr)
-        print("Install with: pipx install --system-site-packages solstone-linux", file=sys.stderr)
+        print(
+            "Install with: pipx install --system-site-packages solstone-linux",
+            file=sys.stderr,
+        )
         return 1
 
     unit_dir = Path.home() / ".config" / "systemd" / "user"
@@ -223,7 +232,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         size_mb = total_size / (1024 * 1024)
         print(f"Cache:  {captures_dir}")
-        print(f"        {segment_count} segments across {day_count} day(s), {size_mb:.1f} MB")
+        print(
+            f"        {segment_count} segments across {day_count} day(s), {size_mb:.1f} MB"
+        )
         if incomplete_count:
             print(f"        {incomplete_count} incomplete segment(s)")
     else:

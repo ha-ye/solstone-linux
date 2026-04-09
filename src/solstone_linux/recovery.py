@@ -129,10 +129,7 @@ def _recover_segment(segment_dir: Path) -> bool:
 
     # Check there are actual files inside (ignore .metadata)
     try:
-        contents = [
-            f for f in segment_dir.iterdir()
-            if f.name != METADATA_FILENAME
-        ]
+        contents = [f for f in segment_dir.iterdir() if f.name != METADATA_FILENAME]
         if not contents:
             logger.warning(f"Empty incomplete segment: {dir_name}")
             return _mark_failed(segment_dir)

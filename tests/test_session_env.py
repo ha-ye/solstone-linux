@@ -14,7 +14,8 @@ class TestCheckSessionReady:
 
     def test_no_display_server(self):
         env = {
-            k: v for k, v in os.environ.items()
+            k: v
+            for k, v in os.environ.items()
             if k not in ("DISPLAY", "WAYLAND_DISPLAY")
         }
         with patch.dict(os.environ, env, clear=True):
@@ -24,10 +25,7 @@ class TestCheckSessionReady:
                 assert "display server" in result
 
     def test_no_dbus(self):
-        env = {
-            k: v for k, v in os.environ.items()
-            if k != "DBUS_SESSION_BUS_ADDRESS"
-        }
+        env = {k: v for k, v in os.environ.items() if k != "DBUS_SESSION_BUS_ADDRESS"}
         env["DISPLAY"] = ":0"
         with patch.dict(os.environ, env, clear=True):
             with patch("solstone_linux.session_env._recover_session_env"):

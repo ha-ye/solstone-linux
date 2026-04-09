@@ -1,22 +1,37 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
-"""GNOME-specific activity detection using Mutter and GTK DBus APIs.
+"""Activity detection using DBus APIs.
 
-Extracted from solstone's observe/gnome/activity.py.
+Extracted from solstone's observe/gnome/activity.py. The DBus services
+probed here are GNOME-specific; on other desktops (KDE, etc.) they may
+not be available. Every function degrades gracefully — returning a safe
+default — so the observer keeps running regardless of desktop environment.
 
 Changes from monorepo version:
 - Replaces `from observe.utils import assign_monitor_positions` with local module
 """
 
+import logging
 import os
 
-import gi
 from dbus_next.aio import MessageBus
 
-gi.require_version("Gdk", "4.0")  # noqa: E402
-gi.require_version("Gtk", "4.0")  # noqa: E402
-from gi.repository import Gdk, Gtk  # noqa: E402
+logger = logging.getLogger(__name__)
+
+# GTK4/GDK4 — optional, only needed for monitor geometry detection.
+# On systems without GTK4, get_monitor_geometries() will raise RuntimeError
+# but screencast recording still works (monitors labeled as "monitor-N").
+try:
+    import gi
+
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gdk, Gtk
+
+    _HAS_GTK = True
+except (ImportError, ValueError):
+    _HAS_GTK = False
 
 # DBus service constants
 IDLE_MONITOR_BUS = "org.gnome.Mutter.IdleMonitor"
@@ -32,6 +47,47 @@ DISPLAY_CONFIG_PATH = "/org/gnome/Mutter/DisplayConfig"
 DISPLAY_CONFIG_IFACE = "org.gnome.Mutter.DisplayConfig"
 
 
+async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
+    """Check which activity DBus services are reachable.
+
+    Returns a dict of service name -> available. Used for startup logging
+    only — the observer runs regardless of what's available.
+    """
+    services = {
+        "idle_monitor": IDLE_MONITOR_BUS,
+        "screensaver": SCREENSAVER_BUS,
+        "display_config": DISPLAY_CONFIG_BUS,
+    }
+    results = {}
+    for name, bus_name in services.items():
+        try:
+            await bus.introspect(bus_name, "/")
+            results[name] = True
+        except Exception:
+            results[name] = False
+
+    available = [k for k, v in results.items() if v]
+    missing = [k for k, v in results.items() if not v]
+    if missing:
+        logger.warning(
+            "Activity signals unavailable: %s — observer will assume active",
+            ", ".join(missing),
+        )
+    if available:
+        logger.info("Activity signals available: %s", ", ".join(available))
+    if not available:
+        logger.warning(
+            "No activity signals available (non-GNOME desktop?) "
+            "— running in always-capture mode"
+        )
+
+    results["gtk4"] = _HAS_GTK
+    if not _HAS_GTK:
+        logger.warning("GTK4 not available — monitor geometry labels will be missing")
+
+    return results
+
+
 async def get_idle_time_ms(bus: MessageBus) -> int:
     """
     Get the current idle time in milliseconds.
@@ -40,13 +96,19 @@ async def get_idle_time_ms(bus: MessageBus) -> int:
         bus: Connected DBus session bus
 
     Returns:
-        Idle time in milliseconds
+        Idle time in milliseconds, or 0 if the service is unavailable
+        (0 = assume active, so the observer keeps capturing).
     """
-    introspection = await bus.introspect(IDLE_MONITOR_BUS, IDLE_MONITOR_PATH)
-    proxy_obj = bus.get_proxy_object(IDLE_MONITOR_BUS, IDLE_MONITOR_PATH, introspection)
-    idle_monitor = proxy_obj.get_interface(IDLE_MONITOR_IFACE)
-    idle_time = await idle_monitor.call_get_idletime()
-    return idle_time
+    try:
+        introspection = await bus.introspect(IDLE_MONITOR_BUS, IDLE_MONITOR_PATH)
+        proxy_obj = bus.get_proxy_object(
+            IDLE_MONITOR_BUS, IDLE_MONITOR_PATH, introspection
+        )
+        idle_monitor = proxy_obj.get_interface(IDLE_MONITOR_IFACE)
+        idle_time = await idle_monitor.call_get_idletime()
+        return idle_time
+    except Exception:
+        return 0
 
 
 async def is_screen_locked(bus: MessageBus) -> bool:
@@ -97,7 +159,13 @@ def get_monitor_geometries() -> list[dict]:
         List of dicts with format:
         [{"id": "connector-id", "box": [x1, y1, x2, y2], "position": "center|left|right|..."}, ...]
         where box contains [left, top, right, bottom] coordinates
+
+    Raises:
+        RuntimeError: If GTK4/GDK4 is not available.
     """
+    if not _HAS_GTK:
+        raise RuntimeError("GTK4 not available for monitor geometry detection")
+
     from .monitor_positions import assign_monitor_positions
 
     # Initialize GTK before using GDK functions

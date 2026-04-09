@@ -251,6 +251,7 @@ class Screencaster:
 
         # Get monitor info from GDK for connector IDs
         from .activity import get_monitor_geometries
+
         try:
             monitors = get_monitor_geometries()
         except Exception as e:

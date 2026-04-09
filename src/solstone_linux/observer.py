@@ -32,13 +32,17 @@ import numpy as np
 from dbus_next.aio import MessageBus
 from dbus_next.constants import BusType
 
-from .activity import get_idle_time_ms, is_power_save_active, is_screen_locked
+from .activity import (
+    get_idle_time_ms,
+    is_power_save_active,
+    is_screen_locked,
+    probe_activity_services,
+)
 from .audio_mute import is_sink_muted
 from .audio_recorder import AudioRecorder
 from .config import Config
 from .recovery import write_segment_metadata
 from .screencast import Screencaster, StreamInfo
-from .streams import stream_name
 from .sync import SyncService
 from .upload import UploadClient
 
@@ -137,6 +141,9 @@ class Observer:
         # Connect to DBus for idle/lock detection
         self.bus = await MessageBus(bus_type=BusType.SESSION).connect()
         logger.info("DBus connection established")
+
+        # Probe which activity signals are available (logging only)
+        await probe_activity_services(self.bus)
 
         # Verify portal is available (exit if not)
         if not await self.screencaster.connect():
@@ -415,8 +422,14 @@ class Observer:
         if self._sync:
             sync_task = asyncio.create_task(self._sync.run())
 
-        # Determine initial mode
-        new_mode = await self.check_activity_status()
+        # Determine initial mode (default to screencast if check fails)
+        try:
+            new_mode = await self.check_activity_status()
+        except Exception as e:
+            logger.warning(
+                "Initial activity check failed: %s — defaulting to screencast", e
+            )
+            new_mode = MODE_SCREENCAST
         self.segment_is_muted = self.cached_is_muted
         self.current_mode = new_mode
 
@@ -445,7 +458,13 @@ class Observer:
                 await asyncio.sleep(CHUNK_DURATION)
 
                 # Check activity status and determine new mode
-                new_mode = await self.check_activity_status()
+                try:
+                    new_mode = await self.check_activity_status()
+                except Exception as e:
+                    logger.warning(
+                        "Activity check failed: %s — keeping current mode", e
+                    )
+                    new_mode = self.current_mode
 
                 # Check for GStreamer failure mid-recording
                 if (
@@ -497,7 +516,9 @@ class Observer:
                 # Check for window boundary (monotonic to avoid DST/clock jumps)
                 elapsed = time.monotonic() - self.start_at_mono
                 is_boundary = (
-                    (elapsed >= self.interval) or screencast_transition or mute_transition
+                    (elapsed >= self.interval)
+                    or screencast_transition
+                    or mute_transition
                 )
 
                 if is_boundary:
