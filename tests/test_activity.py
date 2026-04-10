@@ -1,227 +1,241 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
-"""Tests for desktop activity detection fallbacks."""
+"""Tests for cross-desktop activity detection backends."""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+import logging
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 from solstone_linux import activity
 
 
-def _make_proxy(interface_name: str, iface: object) -> MagicMock:
+def _make_proxy_with_interface(interface: MagicMock) -> MagicMock:
     proxy = MagicMock()
-    proxy.get_interface.side_effect = lambda name: (
-        iface if name == interface_name else None
-    )
+    proxy.get_interface.return_value = interface
     return proxy
 
 
-@pytest.mark.asyncio
-async def test_is_screen_locked_prefers_fdo_true():
-    bus = MagicMock()
-    fdo_iface = AsyncMock()
-    fdo_iface.call_get_active.return_value = True
-    bus.introspect = AsyncMock(return_value="fdo-intro")
-    bus.get_proxy_object.return_value = _make_proxy(
-        activity.FDO_SCREENSAVER_IFACE, fdo_iface
-    )
-
-    result = await activity.is_screen_locked(bus)
-
-    assert result is True
-    bus.introspect.assert_awaited_once_with(
-        activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
-    )
-    fdo_iface.call_get_active.assert_awaited_once_with()
+def _make_variant(value: int) -> MagicMock:
+    variant = MagicMock()
+    variant.value = value
+    return variant
 
 
-@pytest.mark.asyncio
-async def test_is_screen_locked_prefers_fdo_false():
-    bus = MagicMock()
-    fdo_iface = AsyncMock()
-    fdo_iface.call_get_active.return_value = False
-    bus.introspect = AsyncMock(return_value="fdo-intro")
-    bus.get_proxy_object.return_value = _make_proxy(
-        activity.FDO_SCREENSAVER_IFACE, fdo_iface
-    )
+class TestIsScreenLocked:
+    """Test screen lock fallback order."""
 
-    result = await activity.is_screen_locked(bus)
+    @pytest.mark.asyncio
+    async def test_fdo_backend_returns_true_without_gnome_fallback(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_active = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
 
-    assert result is False
-    bus.introspect.assert_awaited_once_with(
-        activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
-    )
-    fdo_iface.call_get_active.assert_awaited_once_with()
+        result = await activity.is_screen_locked(bus)
 
-
-@pytest.mark.asyncio
-async def test_is_screen_locked_falls_back_to_gnome():
-    bus = MagicMock()
-    gnome_iface = AsyncMock()
-    gnome_iface.call_get_active.return_value = True
-    bus.introspect = AsyncMock(
-        side_effect=[Exception("fdo unavailable"), "gnome-intro"]
-    )
-
-    def get_proxy_object(bus_name: str, path: str, intro: str) -> MagicMock:
-        assert (bus_name, path, intro) == (
-            activity.GNOME_SCREENSAVER_BUS,
-            activity.GNOME_SCREENSAVER_PATH,
-            "gnome-intro",
+        assert result is True
+        assert bus.introspect.await_count == 1
+        bus.introspect.assert_awaited_once_with(
+            activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
         )
-        return _make_proxy(activity.GNOME_SCREENSAVER_IFACE, gnome_iface)
 
-    bus.get_proxy_object.side_effect = get_proxy_object
+    @pytest.mark.asyncio
+    async def test_fdo_backend_returns_false_without_gnome_fallback(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_active = AsyncMock(return_value=False)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
 
-    result = await activity.is_screen_locked(bus)
+        result = await activity.is_screen_locked(bus)
 
-    assert result is True
-    assert bus.introspect.await_args_list == [
-        ((activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH),),
-        ((activity.GNOME_SCREENSAVER_BUS, activity.GNOME_SCREENSAVER_PATH),),
-    ]
-    gnome_iface.call_get_active.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_is_screen_locked_returns_false_when_all_backends_fail():
-    bus = MagicMock()
-    bus.introspect = AsyncMock(side_effect=Exception("unavailable"))
-
-    result = await activity.is_screen_locked(bus)
-
-    assert result is False
-    assert bus.introspect.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_is_power_save_active_uses_gnome_display_config_when_nonzero():
-    bus = MagicMock()
-    props_iface = AsyncMock()
-    props_iface.call_get.return_value = SimpleNamespace(value=2)
-    bus.introspect = AsyncMock(return_value="display-intro")
-    bus.get_proxy_object.return_value = _make_proxy(
-        "org.freedesktop.DBus.Properties", props_iface
-    )
-
-    result = await activity.is_power_save_active(bus)
-
-    assert result is True
-    bus.introspect.assert_awaited_once_with(
-        activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH
-    )
-    props_iface.call_get.assert_awaited_once_with(
-        activity.DISPLAY_CONFIG_IFACE, "PowerSaveMode"
-    )
-
-
-@pytest.mark.asyncio
-async def test_is_power_save_active_uses_gnome_display_config_when_zero():
-    bus = MagicMock()
-    props_iface = AsyncMock()
-    props_iface.call_get.return_value = SimpleNamespace(value=0)
-    bus.introspect = AsyncMock(return_value="display-intro")
-    bus.get_proxy_object.return_value = _make_proxy(
-        "org.freedesktop.DBus.Properties", props_iface
-    )
-
-    result = await activity.is_power_save_active(bus)
-
-    assert result is False
-    bus.introspect.assert_awaited_once_with(
-        activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH
-    )
-    props_iface.call_get.assert_awaited_once_with(
-        activity.DISPLAY_CONFIG_IFACE, "PowerSaveMode"
-    )
-
-
-@pytest.mark.asyncio
-async def test_is_power_save_active_falls_back_to_kde():
-    bus = MagicMock()
-    kde_iface = AsyncMock()
-    kde_iface.call_is_lid_closed.return_value = True
-    bus.introspect = AsyncMock(
-        side_effect=[Exception("gnome unavailable"), "kde-intro"]
-    )
-
-    def get_proxy_object(bus_name: str, path: str, intro: str) -> MagicMock:
-        assert (bus_name, path, intro) == (
-            activity.KDE_POWER_BUS,
-            activity.KDE_POWER_PATH,
-            "kde-intro",
+        assert result is False
+        assert bus.introspect.await_count == 1
+        bus.introspect.assert_awaited_once_with(
+            activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
         )
-        return _make_proxy(activity.KDE_POWER_IFACE, kde_iface)
 
-    bus.get_proxy_object.side_effect = get_proxy_object
+    @pytest.mark.asyncio
+    async def test_fdo_failure_gnome_returns_true(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(side_effect=[Exception("fdo unavailable"), object()])
+        gnome_iface = MagicMock()
+        gnome_iface.call_get_active = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(gnome_iface)
 
-    result = await activity.is_power_save_active(bus)
+        result = await activity.is_screen_locked(bus)
 
-    assert result is True
-    assert bus.introspect.await_args_list == [
-        ((activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH),),
-        ((activity.KDE_POWER_BUS, activity.KDE_POWER_PATH),),
-    ]
-    kde_iface.call_is_lid_closed.assert_awaited_once_with()
+        assert result is True
+        assert bus.introspect.await_args_list == [
+            call(activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH),
+            call(activity.GNOME_SCREENSAVER_BUS, activity.GNOME_SCREENSAVER_PATH),
+        ]
 
+    @pytest.mark.asyncio
+    async def test_fdo_failure_gnome_returns_false(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(side_effect=[Exception("fdo unavailable"), object()])
+        gnome_iface = MagicMock()
+        gnome_iface.call_get_active = AsyncMock(return_value=False)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(gnome_iface)
 
-@pytest.mark.asyncio
-async def test_is_power_save_active_returns_false_when_all_backends_fail():
-    bus = MagicMock()
-    bus.introspect = AsyncMock(side_effect=Exception("unavailable"))
+        result = await activity.is_screen_locked(bus)
 
-    result = await activity.is_power_save_active(bus)
+        assert result is False
+        assert bus.introspect.await_args_list == [
+            call(activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH),
+            call(activity.GNOME_SCREENSAVER_BUS, activity.GNOME_SCREENSAVER_PATH),
+        ]
 
-    assert result is False
-    assert bus.introspect.await_count == 2
+    @pytest.mark.asyncio
+    async def test_both_backends_fail_returns_false(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(
+            side_effect=[Exception("fdo unavailable"), Exception("gnome unavailable")]
+        )
 
+        result = await activity.is_screen_locked(bus)
 
-@pytest.mark.asyncio
-async def test_probe_activity_services_all_available():
-    bus = MagicMock()
-    bus.introspect = AsyncMock(return_value="intro")
-
-    results = await activity.probe_activity_services(bus)
-
-    assert results["fdo_screensaver"] is True
-    assert results["gnome_screensaver"] is True
-    assert results["gnome_display_config"] is True
-    assert results["kde_power"] is True
-    assert results["gtk4"] is activity._HAS_GTK
-
-
-@pytest.mark.asyncio
-async def test_probe_activity_services_all_unavailable():
-    bus = MagicMock()
-    bus.introspect = AsyncMock(side_effect=Exception("unavailable"))
-
-    results = await activity.probe_activity_services(bus)
-
-    assert results["fdo_screensaver"] is False
-    assert results["gnome_screensaver"] is False
-    assert results["gnome_display_config"] is False
-    assert results["kde_power"] is False
-    assert results["gtk4"] is activity._HAS_GTK
+        assert result is False
+        assert bus.introspect.await_args_list == [
+            call(activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH),
+            call(activity.GNOME_SCREENSAVER_BUS, activity.GNOME_SCREENSAVER_PATH),
+        ]
 
 
-@pytest.mark.asyncio
-async def test_probe_activity_services_mixed_availability():
-    bus = MagicMock()
+class TestIsPowerSaveActive:
+    """Test power save fallback order."""
 
-    async def introspect(bus_name: str, path: str) -> str:
-        if bus_name in {activity.FDO_SCREENSAVER_BUS, activity.KDE_POWER_BUS}:
-            return "intro"
-        raise Exception(f"{bus_name} unavailable")
+    @pytest.mark.asyncio
+    async def test_gnome_backend_nonzero_mode_returns_true(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get = AsyncMock(return_value=_make_variant(2))
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
 
-    bus.introspect = AsyncMock(side_effect=introspect)
+        result = await activity.is_power_save_active(bus)
 
-    results = await activity.probe_activity_services(bus)
+        assert result is True
+        bus.introspect.assert_awaited_once_with(
+            activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH
+        )
 
-    assert results["fdo_screensaver"] is True
-    assert results["gnome_screensaver"] is False
-    assert results["gnome_display_config"] is False
-    assert results["kde_power"] is True
-    assert results["gtk4"] is activity._HAS_GTK
+    @pytest.mark.asyncio
+    async def test_gnome_backend_zero_mode_returns_false(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get = AsyncMock(return_value=_make_variant(0))
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.is_power_save_active(bus)
+
+        assert result is False
+        bus.introspect.assert_awaited_once_with(
+            activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH
+        )
+
+    @pytest.mark.asyncio
+    async def test_gnome_failure_kde_lid_closed_returns_true(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(
+            side_effect=[Exception("gnome unavailable"), object()]
+        )
+        kde_iface = MagicMock()
+        kde_iface.call_is_lid_closed = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(kde_iface)
+
+        result = await activity.is_power_save_active(bus)
+
+        assert result is True
+        assert bus.introspect.await_args_list == [
+            call(activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH),
+            call(activity.KDE_POWER_BUS, activity.KDE_POWER_PATH),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_gnome_failure_kde_lid_open_returns_false(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(
+            side_effect=[Exception("gnome unavailable"), object()]
+        )
+        kde_iface = MagicMock()
+        kde_iface.call_is_lid_closed = AsyncMock(return_value=False)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(kde_iface)
+
+        result = await activity.is_power_save_active(bus)
+
+        assert result is False
+        assert bus.introspect.await_args_list == [
+            call(activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH),
+            call(activity.KDE_POWER_BUS, activity.KDE_POWER_PATH),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_both_backends_fail_returns_false(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(
+            side_effect=[Exception("gnome unavailable"), Exception("kde unavailable")]
+        )
+
+        result = await activity.is_power_save_active(bus)
+
+        assert result is False
+        assert bus.introspect.await_args_list == [
+            call(activity.DISPLAY_CONFIG_BUS, activity.DISPLAY_CONFIG_PATH),
+            call(activity.KDE_POWER_BUS, activity.KDE_POWER_PATH),
+        ]
+
+
+class TestProbeActivityServices:
+    """Test activity backend probing and logging."""
+
+    @pytest.mark.asyncio
+    async def test_all_services_available_returns_true_results(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+
+        results = await activity.probe_activity_services(bus)
+
+        assert results["fdo_screensaver"] is True
+        assert results["gnome_screensaver"] is True
+        assert results["gnome_display_config"] is True
+        assert results["kde_power"] is True
+        assert results["gtk4"] is activity._HAS_GTK
+
+    @pytest.mark.asyncio
+    async def test_no_services_available_logs_warning(self, caplog):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(side_effect=Exception("missing"))
+
+        with caplog.at_level(logging.WARNING):
+            results = await activity.probe_activity_services(bus)
+
+        assert results["fdo_screensaver"] is False
+        assert results["gnome_screensaver"] is False
+        assert results["gnome_display_config"] is False
+        assert results["kde_power"] is False
+        assert "No activity backends available" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_mixed_service_availability_returns_correct_results(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(
+            side_effect=[
+                object(),
+                Exception("missing"),
+                object(),
+                Exception("missing"),
+            ]
+        )
+
+        results = await activity.probe_activity_services(bus)
+
+        assert results["fdo_screensaver"] is True
+        assert results["gnome_screensaver"] is False
+        assert results["gnome_display_config"] is True
+        assert results["kde_power"] is False

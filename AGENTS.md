@@ -20,7 +20,7 @@ src/solstone_linux/
     audio_recorder.py       Stereo audio recording (mic + system via soundcard)
     audio_detect.py         Audio device detection via ultrasonic tone
     audio_mute.py           PulseAudio mute state detection
-    activity.py             GNOME-specific activity detection (idle, screen lock, power save)
+    activity.py             Cross-desktop activity detection (screen lock, power save) via DBus
     monitor_positions.py    Monitor position assignment from geometry
     session_env.py          Desktop session environment checks and recovery
     streams.py              Stream name derivation (hostname-based)
@@ -101,7 +101,7 @@ Python packages (in pyproject.toml):
 
 ## Key Patterns
 
-- **Activity detection is GNOME-specific.** Uses Mutter IdleMonitor, GNOME ScreenSaver, and Mutter DisplayConfig DBus interfaces. Other desktops capture screen and audio but won't get activity-based segment boundaries.
+- **Activity detection is cross-desktop.** Uses ordered DBus fallback chains for screen lock (freedesktop.org ScreenSaver → GNOME ScreenSaver) and power save (Mutter DisplayConfig → KDE Solid PowerManagement). All backends degrade gracefully to safe defaults.
 - **Audio is stereo-interleaved.** Left channel = microphone, right channel = system audio. When muted, channels are split into separate mono FLAC files.
 - **Screencast uses xdg-desktop-portal.** Session persistence via restore tokens avoids re-prompting the user. GStreamer subprocess (`gst-launch-1.0`) handles the actual PipeWire recording.
 - **Crash recovery runs on startup.** `recovery.py` scans for orphaned `.incomplete` directories older than 2 minutes and finalizes or marks them as failed.

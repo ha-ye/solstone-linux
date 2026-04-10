@@ -3,10 +3,10 @@
 
 """Activity detection using DBus APIs.
 
-Detects screen lock and power save state across GNOME and KDE desktops
-using freedesktop, GNOME, and KDE DBus interfaces with ordered fallback
-chains. Every function degrades gracefully — returning a safe default —
-so the observer keeps running regardless of desktop environment.
+Detects screen lock and display power-save state via DBus, with ordered
+fallback chains that cover GNOME and KDE desktops. Every function
+degrades gracefully — returning a safe default — so the observer keeps
+running regardless of desktop environment.
 """
 
 import logging
@@ -30,7 +30,7 @@ try:
 except (ImportError, ValueError):
     _HAS_GTK = False
 
-# DBus service constants
+# DBus service constants — screen lock
 FDO_SCREENSAVER_BUS = "org.freedesktop.ScreenSaver"
 FDO_SCREENSAVER_PATH = "/ScreenSaver"
 FDO_SCREENSAVER_IFACE = "org.freedesktop.ScreenSaver"
@@ -39,6 +39,7 @@ GNOME_SCREENSAVER_BUS = "org.gnome.ScreenSaver"
 GNOME_SCREENSAVER_PATH = "/org/gnome/ScreenSaver"
 GNOME_SCREENSAVER_IFACE = "org.gnome.ScreenSaver"
 
+# DBus service constants — power save
 DISPLAY_CONFIG_BUS = "org.gnome.Mutter.DisplayConfig"
 DISPLAY_CONFIG_PATH = "/org/gnome/Mutter/DisplayConfig"
 DISPLAY_CONFIG_IFACE = "org.gnome.Mutter.DisplayConfig"
@@ -64,21 +65,22 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
         except Exception:
             results[name] = False
 
+    # Log grouped by function
     lock_backends = ["fdo_screensaver", "gnome_screensaver"]
     power_backends = ["gnome_display_config", "kde_power"]
 
-    lock_available = [name for name in lock_backends if results.get(name)]
-    power_available = [name for name in power_backends if results.get(name)]
+    def _status(keys):
+        return ", ".join(f"{k} [{'ok' if results[k] else 'missing'}]" for k in keys)
 
-    if lock_available:
-        logger.info("Screen lock backends: %s", ", ".join(lock_available))
-    else:
-        logger.warning("No screen lock backends available — will assume unlocked")
+    logger.info("Screen lock backends: %s", _status(lock_backends))
+    logger.info("Power save backends: %s", _status(power_backends))
 
-    if power_available:
-        logger.info("Power save backends: %s", ", ".join(power_available))
-    else:
-        logger.warning("No power save backends available — will assume active display")
+    any_lock = any(results[k] for k in lock_backends)
+    any_power = any(results[k] for k in power_backends)
+    if not any_lock and not any_power:
+        logger.warning(
+            "No activity backends available — running in always-capture mode"
+        )
 
     results["gtk4"] = _HAS_GTK
     if not _HAS_GTK:
@@ -88,11 +90,11 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
 
 
 async def is_screen_locked(bus: MessageBus) -> bool:
-    """Check if the screen is currently locked.
+    """Check if the screen is locked via FDO ScreenSaver, then GNOME ScreenSaver.
 
-    Tries freedesktop.ScreenSaver first (works on KDE, GNOME, and others),
-    then falls back to GNOME ScreenSaver.
+    Returns True if locked, False if unlocked or all backends unavailable.
     """
+    # Try freedesktop.org ScreenSaver first (KDE kwin + GNOME)
     try:
         intro = await bus.introspect(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH)
         obj = bus.get_proxy_object(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH, intro)
@@ -101,6 +103,7 @@ async def is_screen_locked(bus: MessageBus) -> bool:
     except Exception:
         pass
 
+    # Fall back to GNOME ScreenSaver
     try:
         intro = await bus.introspect(GNOME_SCREENSAVER_BUS, GNOME_SCREENSAVER_PATH)
         obj = bus.get_proxy_object(GNOME_SCREENSAVER_BUS, GNOME_SCREENSAVER_PATH, intro)
@@ -111,11 +114,11 @@ async def is_screen_locked(bus: MessageBus) -> bool:
 
 
 async def is_power_save_active(bus: MessageBus) -> bool:
-    """Check if display power save mode is active.
+    """Check display power save via GNOME Mutter, then KDE Solid.
 
-    Tries GNOME Mutter DisplayConfig first (DPMS state), then falls back
-    to KDE Solid PowerManagement lid state.
+    Returns True if power save is active, False otherwise.
     """
+    # Try GNOME Mutter DisplayConfig first
     try:
         intro = await bus.introspect(DISPLAY_CONFIG_BUS, DISPLAY_CONFIG_PATH)
         obj = bus.get_proxy_object(DISPLAY_CONFIG_BUS, DISPLAY_CONFIG_PATH, intro)
@@ -126,6 +129,7 @@ async def is_power_save_active(bus: MessageBus) -> bool:
     except Exception:
         pass
 
+    # Fall back to KDE Solid PowerManagement
     try:
         intro = await bus.introspect(KDE_POWER_BUS, KDE_POWER_PATH)
         obj = bus.get_proxy_object(KDE_POWER_BUS, KDE_POWER_PATH, intro)
