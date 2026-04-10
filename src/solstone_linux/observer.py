@@ -33,7 +33,6 @@ from dbus_next.aio import MessageBus
 from dbus_next.constants import BusType
 
 from .activity import (
-    get_idle_time_ms,
     is_power_save_active,
     is_screen_locked,
     probe_activity_services,
@@ -53,7 +52,6 @@ HOST = socket.gethostname()
 PLATFORM = platform.system().lower()
 
 # Constants
-IDLE_THRESHOLD_MS = 5 * 60 * 1000  # 5 minutes
 RMS_THRESHOLD = 0.01
 MIN_HITS_FOR_SAVE = 3
 CHUNK_DURATION = 5  # seconds
@@ -107,7 +105,6 @@ class Observer:
 
         # Activity status cache (updated each loop)
         self.cached_is_active = False
-        self.cached_idle_time_ms = 0
         self.cached_screen_locked = False
         self.cached_is_muted = False
         self.cached_power_save = False
@@ -138,7 +135,7 @@ class Observer:
         self.audio_recorder.start_recording()
         logger.info("Audio recording started")
 
-        # Connect to DBus for idle/lock detection
+        # Connect to DBus for activity detection
         self.bus = await MessageBus(bus_type=BusType.SESSION).connect()
         logger.info("DBus connection established")
 
@@ -162,19 +159,17 @@ class Observer:
 
     async def check_activity_status(self) -> str:
         """Check system activity status and determine capture mode."""
-        idle_time = await get_idle_time_ms(self.bus)
         screen_locked = await is_screen_locked(self.bus)
         power_save = await is_power_save_active(self.bus)
         sink_muted = await is_sink_muted()
 
         # Cache values for status events
-        self.cached_idle_time_ms = idle_time
         self.cached_screen_locked = screen_locked
         self.cached_is_muted = sink_muted
         self.cached_power_save = power_save
 
         # Determine screen activity
-        screen_idle = (idle_time > IDLE_THRESHOLD_MS) or screen_locked or power_save
+        screen_idle = screen_locked or power_save
         screen_active = not screen_idle
 
         # Determine mode
@@ -395,7 +390,6 @@ class Observer:
         # Activity info
         activity_info = {
             "active": self.cached_is_active,
-            "idle_time_ms": self.cached_idle_time_ms,
             "screen_locked": self.cached_screen_locked,
             "sink_muted": self.cached_is_muted,
             "power_save": self.cached_power_save,

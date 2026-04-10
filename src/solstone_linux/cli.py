@@ -159,7 +159,7 @@ BindsTo=graphical-session.target
 [Service]
 Type=simple
 ExecStart={binary} run
-PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
 Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=300

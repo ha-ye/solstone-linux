@@ -20,6 +20,7 @@ solstone-linux = "solstone_linux.cli:main"
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "ruff",
 ]
 

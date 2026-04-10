@@ -3,13 +3,10 @@
 
 """Activity detection using DBus APIs.
 
-Extracted from solstone's observe/gnome/activity.py. The DBus services
-probed here are GNOME-specific; on other desktops (KDE, etc.) they may
-not be available. Every function degrades gracefully — returning a safe
-default — so the observer keeps running regardless of desktop environment.
-
-Changes from monorepo version:
-- Replaces `from observe.utils import assign_monitor_positions` with local module
+Detects screen lock and power save state across GNOME and KDE desktops
+using freedesktop, GNOME, and KDE DBus interfaces with ordered fallback
+chains. Every function degrades gracefully — returning a safe default —
+so the observer keeps running regardless of desktop environment.
 """
 
 import logging
@@ -34,29 +31,30 @@ except (ImportError, ValueError):
     _HAS_GTK = False
 
 # DBus service constants
-IDLE_MONITOR_BUS = "org.gnome.Mutter.IdleMonitor"
-IDLE_MONITOR_PATH = "/org/gnome/Mutter/IdleMonitor/Core"
-IDLE_MONITOR_IFACE = "org.gnome.Mutter.IdleMonitor"
+FDO_SCREENSAVER_BUS = "org.freedesktop.ScreenSaver"
+FDO_SCREENSAVER_PATH = "/ScreenSaver"
+FDO_SCREENSAVER_IFACE = "org.freedesktop.ScreenSaver"
 
-SCREENSAVER_BUS = "org.gnome.ScreenSaver"
-SCREENSAVER_PATH = "/org/gnome/ScreenSaver"
-SCREENSAVER_IFACE = "org.gnome.ScreenSaver"
+GNOME_SCREENSAVER_BUS = "org.gnome.ScreenSaver"
+GNOME_SCREENSAVER_PATH = "/org/gnome/ScreenSaver"
+GNOME_SCREENSAVER_IFACE = "org.gnome.ScreenSaver"
 
 DISPLAY_CONFIG_BUS = "org.gnome.Mutter.DisplayConfig"
 DISPLAY_CONFIG_PATH = "/org/gnome/Mutter/DisplayConfig"
 DISPLAY_CONFIG_IFACE = "org.gnome.Mutter.DisplayConfig"
 
+KDE_POWER_BUS = "org.kde.Solid.PowerManagement"
+KDE_POWER_PATH = "/org/kde/Solid/PowerManagement"
+KDE_POWER_IFACE = "org.kde.Solid.PowerManagement"
+
 
 async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
-    """Check which activity DBus services are reachable.
-
-    Returns a dict of service name -> available. Used for startup logging
-    only — the observer runs regardless of what's available.
-    """
+    """Check which activity DBus services are reachable."""
     services = {
-        "idle_monitor": IDLE_MONITOR_BUS,
-        "screensaver": SCREENSAVER_BUS,
-        "display_config": DISPLAY_CONFIG_BUS,
+        "fdo_screensaver": FDO_SCREENSAVER_BUS,
+        "gnome_screensaver": GNOME_SCREENSAVER_BUS,
+        "gnome_display_config": DISPLAY_CONFIG_BUS,
+        "kde_power": KDE_POWER_BUS,
     }
     results = {}
     for name, bus_name in services.items():
@@ -66,20 +64,21 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
         except Exception:
             results[name] = False
 
-    available = [k for k, v in results.items() if v]
-    missing = [k for k, v in results.items() if not v]
-    if missing:
-        logger.warning(
-            "Activity signals unavailable: %s — observer will assume active",
-            ", ".join(missing),
-        )
-    if available:
-        logger.info("Activity signals available: %s", ", ".join(available))
-    if not available:
-        logger.warning(
-            "No activity signals available (non-GNOME desktop?) "
-            "— running in always-capture mode"
-        )
+    lock_backends = ["fdo_screensaver", "gnome_screensaver"]
+    power_backends = ["gnome_display_config", "kde_power"]
+
+    lock_available = [name for name in lock_backends if results.get(name)]
+    power_available = [name for name in power_backends if results.get(name)]
+
+    if lock_available:
+        logger.info("Screen lock backends: %s", ", ".join(lock_available))
+    else:
+        logger.warning("No screen lock backends available — will assume unlocked")
+
+    if power_available:
+        logger.info("Power save backends: %s", ", ".join(power_available))
+    else:
+        logger.warning("No power save backends available — will assume active display")
 
     results["gtk4"] = _HAS_GTK
     if not _HAS_GTK:
@@ -88,57 +87,34 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     return results
 
 
-async def get_idle_time_ms(bus: MessageBus) -> int:
-    """
-    Get the current idle time in milliseconds.
-
-    Args:
-        bus: Connected DBus session bus
-
-    Returns:
-        Idle time in milliseconds, or 0 if the service is unavailable
-        (0 = assume active, so the observer keeps capturing).
-    """
-    try:
-        introspection = await bus.introspect(IDLE_MONITOR_BUS, IDLE_MONITOR_PATH)
-        proxy_obj = bus.get_proxy_object(
-            IDLE_MONITOR_BUS, IDLE_MONITOR_PATH, introspection
-        )
-        idle_monitor = proxy_obj.get_interface(IDLE_MONITOR_IFACE)
-        idle_time = await idle_monitor.call_get_idletime()
-        return idle_time
-    except Exception:
-        return 0
-
-
 async def is_screen_locked(bus: MessageBus) -> bool:
-    """
-    Check if the screen is currently locked using GNOME ScreenSaver.
+    """Check if the screen is currently locked.
 
-    Args:
-        bus: Connected DBus session bus
-
-    Returns:
-        True if screen is locked, False otherwise
+    Tries freedesktop.ScreenSaver first (works on KDE, GNOME, and others),
+    then falls back to GNOME ScreenSaver.
     """
     try:
-        intro = await bus.introspect(SCREENSAVER_BUS, SCREENSAVER_PATH)
-        obj = bus.get_proxy_object(SCREENSAVER_BUS, SCREENSAVER_PATH, intro)
-        iface = obj.get_interface(SCREENSAVER_IFACE)
+        intro = await bus.introspect(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH)
+        obj = bus.get_proxy_object(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH, intro)
+        iface = obj.get_interface(FDO_SCREENSAVER_IFACE)
+        return bool(await iface.call_get_active())
+    except Exception:
+        pass
+
+    try:
+        intro = await bus.introspect(GNOME_SCREENSAVER_BUS, GNOME_SCREENSAVER_PATH)
+        obj = bus.get_proxy_object(GNOME_SCREENSAVER_BUS, GNOME_SCREENSAVER_PATH, intro)
+        iface = obj.get_interface(GNOME_SCREENSAVER_IFACE)
         return bool(await iface.call_get_active())
     except Exception:
         return False
 
 
 async def is_power_save_active(bus: MessageBus) -> bool:
-    """
-    Check if display power save mode is active (screen blanked).
+    """Check if display power save mode is active.
 
-    Args:
-        bus: Connected DBus session bus
-
-    Returns:
-        True if power save is active, False otherwise
+    Tries GNOME Mutter DisplayConfig first (DPMS state), then falls back
+    to KDE Solid PowerManagement lid state.
     """
     try:
         intro = await bus.introspect(DISPLAY_CONFIG_BUS, DISPLAY_CONFIG_PATH)
@@ -147,6 +123,14 @@ async def is_power_save_active(bus: MessageBus) -> bool:
         mode_variant = await iface.call_get(DISPLAY_CONFIG_IFACE, "PowerSaveMode")
         mode = int(mode_variant.value)
         return mode != 0
+    except Exception:
+        pass
+
+    try:
+        intro = await bus.introspect(KDE_POWER_BUS, KDE_POWER_PATH)
+        obj = bus.get_proxy_object(KDE_POWER_BUS, KDE_POWER_PATH, intro)
+        iface = obj.get_interface(KDE_POWER_IFACE)
+        return bool(await iface.call_is_lid_closed())
     except Exception:
         return False
 
