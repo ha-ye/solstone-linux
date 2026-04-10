@@ -205,6 +205,7 @@ class TestProbeActivityServices:
         assert results["gnome_screensaver"] is True
         assert results["gnome_display_config"] is True
         assert results["kde_power"] is True
+        assert results["kscreen"] is True
         assert results["gtk4"] is activity._HAS_GTK
 
     @pytest.mark.asyncio
@@ -219,6 +220,7 @@ class TestProbeActivityServices:
         assert results["gnome_screensaver"] is False
         assert results["gnome_display_config"] is False
         assert results["kde_power"] is False
+        assert results["kscreen"] is False
         assert "No activity backends available" in caplog.text
 
     @pytest.mark.asyncio
@@ -230,6 +232,7 @@ class TestProbeActivityServices:
                 Exception("missing"),
                 object(),
                 Exception("missing"),
+                object(),
             ]
         )
 
@@ -239,3 +242,118 @@ class TestProbeActivityServices:
         assert results["gnome_screensaver"] is False
         assert results["gnome_display_config"] is True
         assert results["kde_power"] is False
+        assert results["kscreen"] is True
+
+
+class TestGetMonitorGeometriesKscreen:
+    """Test KDE KScreen monitor geometry detection."""
+
+    @pytest.mark.asyncio
+    async def test_returns_monitors_from_kscreen_dbus(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_config = AsyncMock(
+            return_value={
+                "outputs": {
+                    1: {
+                        "enabled": True,
+                        "connected": True,
+                        "name": "DP-1",
+                        "pos": {"x": 0, "y": 0},
+                        "size": {"width": 1920, "height": 1080},
+                        "scale": 1.0,
+                    },
+                    2: {
+                        "enabled": True,
+                        "connected": True,
+                        "name": "DP-2",
+                        "pos": {"x": 1920, "y": 0},
+                        "size": {"width": 2560, "height": 1440},
+                        "scale": 1.0,
+                    },
+                }
+            }
+        )
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.get_monitor_geometries_kscreen(bus)
+
+        assert result == [
+            {"id": "DP-1", "box": [0, 0, 1920, 1080], "position": "left"},
+            {"id": "DP-2", "box": [1920, 0, 4480, 1440], "position": "right"},
+        ]
+        bus.introspect.assert_awaited_once_with(
+            activity.KSCREEN_BUS, activity.KSCREEN_PATH
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_disabled_outputs(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_config = AsyncMock(
+            return_value={
+                "outputs": {
+                    1: {
+                        "enabled": True,
+                        "connected": True,
+                        "name": "DP-1",
+                        "pos": {"x": 0, "y": 0},
+                        "size": {"width": 1920, "height": 1080},
+                        "scale": 1.0,
+                    },
+                    2: {
+                        "enabled": False,
+                        "connected": True,
+                        "name": "DP-2",
+                        "pos": {"x": 1920, "y": 0},
+                        "size": {"width": 2560, "height": 1440},
+                        "scale": 1.0,
+                    },
+                }
+            }
+        )
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.get_monitor_geometries_kscreen(bus)
+
+        assert result == [
+            {"id": "DP-1", "box": [0, 0, 1920, 1080], "position": "center"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_dbus_failure(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(side_effect=Exception("missing"))
+
+        result = await activity.get_monitor_geometries_kscreen(bus)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_applies_scale_factor(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_config = AsyncMock(
+            return_value={
+                "outputs": {
+                    1: {
+                        "enabled": True,
+                        "connected": True,
+                        "name": "DP-1",
+                        "pos": {"x": 0, "y": 0},
+                        "size": {"width": 3840, "height": 2160},
+                        "scale": 2.0,
+                    }
+                }
+            }
+        )
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.get_monitor_geometries_kscreen(bus)
+
+        assert result == [
+            {"id": "DP-1", "box": [0, 0, 1920, 1080], "position": "center"}
+        ]

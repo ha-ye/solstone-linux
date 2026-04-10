@@ -12,6 +12,7 @@ running regardless of desktop environment.
 import logging
 import os
 
+from dbus_next import Variant
 from dbus_next.aio import MessageBus
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,11 @@ KDE_POWER_BUS = "org.kde.Solid.PowerManagement"
 KDE_POWER_PATH = "/org/kde/Solid/PowerManagement"
 KDE_POWER_IFACE = "org.kde.Solid.PowerManagement"
 
+# DBus service constants — monitor geometry (KDE)
+KSCREEN_BUS = "org.kde.KScreen"
+KSCREEN_PATH = "/backend"
+KSCREEN_IFACE = "org.kde.kscreen.Backend"
+
 
 async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     """Check which activity DBus services are reachable."""
@@ -56,6 +62,7 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
         "gnome_screensaver": GNOME_SCREENSAVER_BUS,
         "gnome_display_config": DISPLAY_CONFIG_BUS,
         "kde_power": KDE_POWER_BUS,
+        "kscreen": KSCREEN_BUS,
     }
     results = {}
     for name, bus_name in services.items():
@@ -68,12 +75,19 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     # Log grouped by function
     lock_backends = ["fdo_screensaver", "gnome_screensaver"]
     power_backends = ["gnome_display_config", "kde_power"]
+    monitor_backends = ["kscreen"]
+    results["gtk4"] = _HAS_GTK
 
     def _status(keys):
         return ", ".join(f"{k} [{'ok' if results[k] else 'missing'}]" for k in keys)
 
     logger.info("Screen lock backends: %s", _status(lock_backends))
     logger.info("Power save backends: %s", _status(power_backends))
+    logger.info(
+        "Monitor backends: %s, gtk4 [%s]",
+        _status(monitor_backends),
+        "ok" if results["gtk4"] else "missing",
+    )
 
     any_lock = any(results[k] for k in lock_backends)
     any_power = any(results[k] for k in power_backends)
@@ -81,10 +95,6 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
         logger.warning(
             "No activity backends available — running in always-capture mode"
         )
-
-    results["gtk4"] = _HAS_GTK
-    if not _HAS_GTK:
-        logger.warning("GTK4 not available — monitor geometry labels will be missing")
 
     return results
 
@@ -183,3 +193,70 @@ def get_monitor_geometries() -> list[dict]:
 
     # Assign position labels using shared algorithm
     return assign_monitor_positions(geometries)
+
+
+def _unwrap_variants(obj):
+    """Recursively unwrap dbus-next Variants in nested DBus structures."""
+    if isinstance(obj, Variant):
+        return _unwrap_variants(obj.value)
+    if isinstance(obj, dict):
+        return {key: _unwrap_variants(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_unwrap_variants(value) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(_unwrap_variants(value) for value in obj)
+    return obj
+
+
+async def get_monitor_geometries_kscreen(bus: MessageBus) -> list[dict]:
+    """
+    Get monitor geometry information from KDE KScreen DBus.
+
+    Returns:
+        List of dicts with format:
+        [{"id": "connector-id", "box": [x1, y1, x2, y2], "position": "center|left|right|..."}, ...]
+    """
+    try:
+        from .monitor_positions import assign_monitor_positions
+
+        intro = await bus.introspect(KSCREEN_BUS, KSCREEN_PATH)
+        obj = bus.get_proxy_object(KSCREEN_BUS, KSCREEN_PATH, intro)
+        iface = obj.get_interface(KSCREEN_IFACE)
+        config = _unwrap_variants(await iface.call_get_config())
+        outputs = config.get("outputs", {})
+        output_values = outputs.values() if isinstance(outputs, dict) else outputs
+
+        geometries = []
+        for output in output_values:
+            if not isinstance(output, dict):
+                continue
+            if not output.get("enabled") or not output.get("connected"):
+                continue
+
+            name = output.get("name")
+            pos = output.get("pos", {})
+            size = output.get("size", {})
+            if not isinstance(name, str) or not isinstance(pos, dict):
+                continue
+            if not isinstance(size, dict):
+                continue
+
+            x = int(pos.get("x", 0))
+            y = int(pos.get("y", 0))
+            scale = float(output.get("scale", 1.0) or 1.0)
+            width = int(size.get("width", 0))
+            height = int(size.get("height", 0))
+            logical_width = round(width / scale)
+            logical_height = round(height / scale)
+            geometries.append(
+                {
+                    "id": name,
+                    "box": [x, y, x + logical_width, y + logical_height],
+                }
+            )
+
+        monitors = assign_monitor_positions(geometries)
+        logger.debug("KScreen monitor geometries found: %d", len(monitors))
+        return monitors
+    except Exception:
+        return []

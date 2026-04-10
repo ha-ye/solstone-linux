@@ -122,14 +122,25 @@ def _variant_or_value(val):
 
 def _match_streams_to_monitors(streams: list[dict], monitors: list[dict]) -> list[dict]:
     """
-    Match portal stream geometries to GDK monitor info.
+    Match portal stream geometries to monitor info.
 
     Portal streams have position (x, y) and size (width, height).
-    GDK monitors have connector IDs and box coordinates.
+    Monitors (from GDK or KScreen) have connector IDs and box coordinates.
 
     Returns streams augmented with connector and position labels.
     """
     matched = []
+    used_position_connectors = set()
+
+    # Detect if all streams lack meaningful position data (KDE portal reports (0,0) for all)
+    all_zero_position = True
+    for stream in streams:
+        props = stream.get("props", {})
+        pos = _variant_or_value(props.get("position", (0, 0)))
+        if isinstance(pos, (tuple, list)) and len(pos) >= 2:
+            if int(pos[0]) != 0 or int(pos[1]) != 0:
+                all_zero_position = False
+                break
 
     for stream in streams:
         props = stream.get("props", {})
@@ -152,18 +163,23 @@ def _match_streams_to_monitors(streams: list[dict], monitors: list[dict]) -> lis
         best_match = None
         best_overlap = 0
 
-        for monitor in monitors:
-            mx1, my1, mx2, my2 = monitor["box"]
-            mw, mh = mx2 - mx1, my2 - my1
+        if not all_zero_position:
+            for monitor in monitors:
+                if monitor["id"] in used_position_connectors:
+                    continue
 
-            # Check if geometries match (within tolerance for scaling)
-            if abs(sx - mx1) < 10 and abs(sy - my1) < 10:
-                overlap = min(sw, mw) * min(sh, mh)
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_match = monitor
+                mx1, my1, mx2, my2 = monitor["box"]
+                mw, mh = mx2 - mx1, my2 - my1
+
+                # Check if geometries match (within tolerance for scaling)
+                if abs(sx - mx1) < 10 and abs(sy - my1) < 10:
+                    overlap = min(sw, mw) * min(sh, mh)
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_match = monitor
 
         if best_match:
+            used_position_connectors.add(best_match["id"])
             stream["connector"] = best_match["id"]
             stream["position_label"] = best_match.get("position", "unknown")
             stream["x"] = best_match["box"][0]
@@ -180,6 +196,42 @@ def _match_streams_to_monitors(streams: list[dict], monitors: list[dict]) -> lis
             stream["height"] = sh
 
         matched.append(stream)
+
+    unmatched_streams = [
+        stream
+        for stream in matched
+        if str(stream.get("connector", "")).startswith("monitor-")
+    ]
+    matched_connectors = {
+        stream["connector"]
+        for stream in matched
+        if not str(stream.get("connector", "")).startswith("monitor-")
+    }
+    unmatched_monitors = [
+        monitor for monitor in monitors if monitor["id"] not in matched_connectors
+    ]
+
+    for stream in unmatched_streams:
+        if not unmatched_monitors:
+            break
+
+        best_match = None
+        sw, sh = stream["width"], stream["height"]
+        for monitor in unmatched_monitors:
+            mx1, my1, mx2, my2 = monitor["box"]
+            mw, mh = mx2 - mx1, my2 - my1
+            if abs(sw - mw) <= 2 and abs(sh - mh) <= 2:
+                best_match = monitor
+                break
+
+        if best_match:
+            stream["connector"] = best_match["id"]
+            stream["position_label"] = best_match.get("position", "unknown")
+            stream["x"] = best_match["box"][0]
+            stream["y"] = best_match["box"][1]
+            stream["width"] = best_match["box"][2] - best_match["box"][0]
+            stream["height"] = best_match["box"][3] - best_match["box"][1]
+            unmatched_monitors.remove(best_match)
 
     return matched
 
@@ -257,6 +309,16 @@ class Screencaster:
         except Exception as e:
             logger.warning(f"Failed to get monitor geometries: {e}")
             monitors = []
+
+        # Fall back to KScreen on KDE when GDK is unavailable
+        if not monitors and self.bus:
+            from .activity import get_monitor_geometries_kscreen
+
+            try:
+                monitors = await get_monitor_geometries_kscreen(self.bus)
+            except Exception as e:
+                logger.warning(f"KScreen monitor fallback failed: {e}")
+                monitors = []
 
         # Get portal interface
         root_intro = await self.bus.introspect(PORTAL_BUS, PORTAL_PATH)
