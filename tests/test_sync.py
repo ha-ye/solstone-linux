@@ -1,13 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
+import asyncio
 import json
 import os
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from solstone_linux.config import Config
 from solstone_linux.recovery import recover_incomplete_segments
+from solstone_linux.sync import (
+    CIRCUIT_COOLDOWN_INITIAL,
+    CIRCUIT_COOLDOWN_MAX,
+    SyncService,
+)
 from solstone_linux.upload import ErrorType, UploadClient
 
 
@@ -228,6 +237,136 @@ class TestCircuitBreakerThresholds:
         sync._last_error_type = ErrorType.TRANSIENT
         assert sync._circuit_threshold() == CIRCUIT_THRESHOLD_TRANSIENT
         assert CIRCUIT_THRESHOLD_TRANSIENT >= 5
+
+
+class TestCircuitBreakerRecovery:
+    """Test circuit breaker recovery for transient failures."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        """Create a SyncService with minimal config."""
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    async def _run_briefly(self, sync: SyncService) -> None:
+        sync._trigger.set()
+        task = asyncio.create_task(sync.run())
+        await asyncio.sleep(0.01)
+        sync.stop()
+        await asyncio.wait_for(task, timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_transient_circuit_recovers_after_cooldown(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = False
+        sync._circuit_open_since = time.monotonic() - 31
+        sync._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+        sync._consecutive_failures = 5
+        sync._last_error_type = ErrorType.TRANSIENT
+        sync._sync = AsyncMock(side_effect=lambda force_full=False: sync.stop())
+        sync._trigger.set()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=[]):
+            await sync.run()
+
+        assert not sync._circuit_open
+        assert sync._consecutive_failures == 0
+        assert sync._last_error_type is None
+        assert sync._circuit_cooldown == CIRCUIT_COOLDOWN_INITIAL
+        sync._sync.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_revoked_circuit_never_recovers(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = True
+        sync._circuit_open_since = time.monotonic() - 600
+        sync._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+        sync._sync = AsyncMock()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+            await self._run_briefly(sync)
+
+        assert sync._circuit_open
+        assert sync._circuit_open_permanent
+        to_thread.assert_not_called()
+        sync._sync.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_backoff_increases_on_failed_probe(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = False
+        sync._circuit_open_since = 70.0
+        sync._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+        sync._sync = AsyncMock()
+        before_probe = time.monotonic()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=None):
+            await self._run_briefly(sync)
+
+        assert sync._circuit_open
+        assert sync._circuit_cooldown == CIRCUIT_COOLDOWN_INITIAL * 2
+        assert sync._circuit_open_since >= before_probe
+        sync._sync.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_full_reset_after_successful_probe(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = False
+        sync._circuit_open_since = time.monotonic() - 121
+        sync._circuit_cooldown = 120
+        sync._consecutive_failures = 5
+        sync._last_error_type = ErrorType.TRANSIENT
+        sync._sync = AsyncMock(side_effect=lambda force_full=False: sync.stop())
+        sync._trigger.set()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=[]):
+            await sync.run()
+
+        assert not sync._circuit_open
+        assert not sync._circuit_open_permanent
+        assert sync._circuit_open_since == 0.0
+        assert sync._circuit_cooldown == CIRCUIT_COOLDOWN_INITIAL
+        assert sync._consecutive_failures == 0
+        assert sync._last_error_type is None
+
+    @pytest.mark.asyncio
+    async def test_cooldown_caps_at_max(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = False
+        sync._circuit_open_since = 0.0
+        sync._circuit_cooldown = CIRCUIT_COOLDOWN_MAX
+        sync._sync = AsyncMock()
+        before_probe = time.monotonic()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=None):
+            await self._run_briefly(sync)
+
+        assert sync._circuit_open
+        assert sync._circuit_cooldown == CIRCUIT_COOLDOWN_MAX
+        assert sync._circuit_open_since >= before_probe
+        sync._sync.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_probe_before_cooldown_elapses(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._circuit_open = True
+        sync._circuit_open_permanent = False
+        sync._circuit_open_since = time.monotonic() - 10
+        sync._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+        sync._sync = AsyncMock()
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+            await self._run_briefly(sync)
+
+        assert sync._circuit_open
+        to_thread.assert_not_called()
+        sync._sync.assert_not_awaited()
 
 
 class TestRetryCapRespected:

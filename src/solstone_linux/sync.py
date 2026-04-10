@@ -10,6 +10,8 @@ newest-to-oldest, queries server for existing segments, uploads missing ones.
 Refinements over tmux baseline:
 - Respects configured sync_max_retries (no hard min(config,3) cap)
 - Circuit breaker tuned by error type: auth=immediate, transient=5-10
+- Transient circuit breaker recovers via half-open probe with exponential backoff
+- Auth/revoked circuit breaker is permanent (requires restart)
 - Synced-days pruning at 90 days to prevent unbounded cache growth
 """
 
@@ -33,6 +35,11 @@ logger = logging.getLogger(__name__)
 CIRCUIT_THRESHOLD_AUTH = 1  # Auth failures open immediately
 CIRCUIT_THRESHOLD_TRANSIENT = 5  # Transient failures need 5 consecutive
 
+# Circuit breaker recovery cooldown
+CIRCUIT_COOLDOWN_INITIAL = 30  # seconds before first probe
+CIRCUIT_COOLDOWN_FACTOR = 2  # multiply cooldown on each failed probe
+CIRCUIT_COOLDOWN_MAX = 300  # cap at 5 minutes
+
 # Synced days older than this are pruned from the cache
 SYNCED_DAYS_MAX_AGE = 90
 
@@ -47,6 +54,9 @@ class SyncService:
         self._consecutive_failures = 0
         self._last_error_type: ErrorType | None = None
         self._circuit_open = False
+        self._circuit_open_permanent = False
+        self._circuit_open_since: float = 0.0
+        self._circuit_cooldown: float = CIRCUIT_COOLDOWN_INITIAL
         self._last_full_sync: float = 0
         self._running = True
         self._trigger = asyncio.Event()
@@ -130,8 +140,43 @@ class SyncService:
                     break
 
                 if self._circuit_open:
-                    logger.warning("Circuit breaker open — skipping sync")
-                    continue
+                    if self._circuit_open_permanent:
+                        logger.warning(
+                            "Circuit breaker open (permanent) — skipping sync"
+                        )
+                        continue
+
+                    elapsed = time.monotonic() - self._circuit_open_since
+                    if elapsed < self._circuit_cooldown:
+                        remaining = self._circuit_cooldown - elapsed
+                        logger.warning(
+                            f"Circuit breaker open — {remaining:.0f}s until probe"
+                        )
+                        continue
+
+                    logger.info("Circuit breaker half-open — probing server")
+                    today = datetime.now().strftime("%Y%m%d")
+                    probe_result = await asyncio.to_thread(
+                        self._client.get_server_segments, today
+                    )
+                    if probe_result is not None:
+                        logger.info("Circuit breaker probe succeeded — closing circuit")
+                        self._circuit_open = False
+                        self._circuit_open_permanent = False
+                        self._circuit_open_since = 0.0
+                        self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+                        self._consecutive_failures = 0
+                        self._last_error_type = None
+                    else:
+                        self._circuit_cooldown = min(
+                            self._circuit_cooldown * CIRCUIT_COOLDOWN_FACTOR,
+                            CIRCUIT_COOLDOWN_MAX,
+                        )
+                        self._circuit_open_since = time.monotonic()
+                        logger.warning(
+                            f"Circuit breaker probe failed — next probe in {self._circuit_cooldown:.0f}s"
+                        )
+                        continue
 
                 # Force full sync daily
                 now = time.time()
@@ -205,6 +250,8 @@ class SyncService:
                     threshold = self._circuit_threshold()
                     if self._consecutive_failures >= threshold:
                         self._circuit_open = True
+                        self._circuit_open_since = time.monotonic()
+                        self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
                         logger.error(
                             f"Circuit breaker OPEN: {self._consecutive_failures} consecutive "
                             f"{self._last_error_type.value if self._last_error_type else 'unknown'} "
@@ -273,6 +320,7 @@ class SyncService:
         if self._client.is_revoked:
             logger.error("Client revoked — disabling sync")
             self._circuit_open = True
+            self._circuit_open_permanent = True
             return False
 
         logger.error(f"Upload failed: {day}/{segment_key}")
