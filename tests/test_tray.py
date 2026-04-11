@@ -70,7 +70,7 @@ class TestUpdateStatus:
         assert app._pause_submenu.visible is False
         assert app._resume_item.visible is True
         assert app._status_item.label == "paused"
-        assert app.menu.update_item.call_count == 3
+        assert app.menu.update_item.call_count == 2
 
     def test_update_status_idle(self):
         app = _make_app()

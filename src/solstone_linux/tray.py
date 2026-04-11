@@ -355,7 +355,6 @@ class TrayApp:
             "stopped": "not running",
         }
         self._status_item.label = labels.get(status, status)
-        self.menu.update_item(self._status_item)
 
         # Toggle pause/resume
         is_paused = status == "paused"
@@ -392,7 +391,6 @@ class TrayApp:
             "offline": "sync: offline",
         }
         self._sync_item.label = labels.get(sync_status, f"sync: {sync_status}")
-        self.menu.update_item(self._sync_item)
 
         # Update icon — syncing state gets the half icon
         if not self.error:
@@ -411,7 +409,6 @@ class TrayApp:
         new_label = f"segment: {mins}:{secs:02d} remaining"
         if self._segment_item.label != new_label:
             self._segment_item.label = new_label
-            self.menu.update_item(self._segment_item)
 
         # Stats (computed in update())
         if self.stats:
@@ -429,13 +426,10 @@ class TrayApp:
 
             if self._cache_item.label != new_cache:
                 self._cache_item.label = new_cache
-                self.menu.update_item(self._cache_item)
             if self._captures_item.label != new_captures:
                 self._captures_item.label = new_captures
-                self.menu.update_item(self._captures_item)
             if self._uptime_item.label != new_uptime:
                 self._uptime_item.label = new_uptime
-                self.menu.update_item(self._uptime_item)
 
         # Update pause remaining in resume button
         if self.status == "paused" and pause_remaining > 0:
@@ -443,7 +437,6 @@ class TrayApp:
             new_resume = f"resume ({pr_mins}m remaining)"
             if self._resume_item.label != new_resume:
                 self._resume_item.label = new_resume
-                self.menu.update_item(self._resume_item)
 
     def _build_tooltip(self) -> str:
         """Build rich tooltip body (HTML on KDE)."""
