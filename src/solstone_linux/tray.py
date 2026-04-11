@@ -15,6 +15,7 @@ from pathlib import Path
 
 from dbus_next.aio import MessageBus
 
+from . import __version__
 from .dbusmenu import DBusMenu, MenuItem, separator
 from .sni import StatusNotifierItem, register_with_watcher
 
@@ -167,7 +168,7 @@ class TrayApp:
         """Build the full tray menu structure."""
 
         # ── Status submenu (live data) ──
-        self._status_item = MenuItem(label="recording", enabled=False)
+        self._status_item = MenuItem(label="observing", enabled=False)
         self._sync_item = MenuItem(label="sync: up to date", enabled=False)
         self._segment_item = MenuItem(label="segment: --:--", enabled=False)
         self._cache_item = MenuItem(label="cache: --", enabled=False)
@@ -175,7 +176,7 @@ class TrayApp:
         self._uptime_item = MenuItem(label="uptime: --", enabled=False)
 
         status_submenu = MenuItem(
-            label="Status",
+            label="status",
             children_display="submenu",
         )
         status_submenu.children = [
@@ -192,43 +193,43 @@ class TrayApp:
         pause_15m = MenuItem(label="15 minutes", callback=lambda: self._pause(900))
         pause_30m = MenuItem(label="30 minutes", callback=lambda: self._pause(1800))
         pause_1h = MenuItem(label="1 hour", callback=lambda: self._pause(3600))
-        pause_indef = MenuItem(label="Until I resume", callback=lambda: self._pause(0))
+        pause_indef = MenuItem(label="until I resume", callback=lambda: self._pause(0))
 
         self._pause_submenu = MenuItem(
-            label="Pause",
+            label="pause",
             children_display="submenu",
         )
         self._pause_submenu.children = [pause_15m, pause_30m, pause_1h, pause_indef]
 
         self._resume_item = MenuItem(
-            label="Resume",
+            label="resume",
             visible=False,
             callback=self._resume,
         )
 
         # ── Open journal / Show captures ──
         open_journal = MenuItem(
-            label="Open journal",
+            label="open journal",
             callback=self._open_journal,
         )
 
         open_captures = MenuItem(
-            label="Show captures",
+            label="show captures",
             callback=self._open_captures,
         )
 
         # ── Settings submenu ──
         settings_open_config = MenuItem(
-            label="Open config.json",
+            label="open config.json",
             callback=self._open_config,
         )
         settings_copy_agent = MenuItem(
-            label="Copy coding agent instructions",
+            label="copy coding agent instructions",
             callback=self._copy_agent_instructions,
         )
 
         settings_submenu = MenuItem(
-            label="Settings",
+            label="settings",
             children_display="submenu",
         )
         settings_submenu.children = [
@@ -237,25 +238,35 @@ class TrayApp:
         ]
 
         # ── About submenu ──
-        about_observers = MenuItem(
-            label="solstone.app/observers",
+        about_version = MenuItem(
+            label=f"solstone observer v{__version__}",
+            enabled=False,
+        )
+        about_website = MenuItem(
+            label="solstone.app",
             callback=lambda: self._open_url("https://solstone.app/observers"),
         )
+        about_source = MenuItem(
+            label="source code",
+            callback=lambda: self._open_url("https://github.com/solpbc/solstone-linux"),
+        )
         about_privacy = MenuItem(
-            label="Privacy policy",
+            label="privacy policy",
             callback=lambda: self._open_url("https://solpbc.org/privacy"),
         )
         about_copyright = MenuItem(
-            label="\u00a9 sol pbc",
+            label="\u00a9 2026 sol pbc \u2014 a public benefit corporation",
             enabled=False,
         )
 
         about_submenu = MenuItem(
-            label="About",
+            label="about",
             children_display="submenu",
         )
         about_submenu.children = [
-            about_observers,
+            about_version,
+            about_website,
+            about_source,
             about_privacy,
             separator(),
             about_copyright,
@@ -263,7 +274,7 @@ class TrayApp:
 
         # ── Quit ──
         quit_item = MenuItem(
-            label="Quit solstone observer",
+            label="quit solstone observer",
             callback=self._quit,
         )
 
@@ -272,11 +283,11 @@ class TrayApp:
             [
                 status_submenu,
                 separator(),
-                self._pause_submenu,
-                self._resume_item,
-                separator(),
                 open_journal,
                 open_captures,
+                separator(),
+                self._pause_submenu,
+                self._resume_item,
                 separator(),
                 settings_submenu,
                 about_submenu,
@@ -305,7 +316,7 @@ class TrayApp:
 
         # Update status submenu item
         labels = {
-            "recording": "recording",
+            "recording": "observing",
             "paused": "paused",
             "idle": "idle (screen inactive)",
             "stopped": "not running",
@@ -319,9 +330,9 @@ class TrayApp:
         self._resume_item.visible = is_paused
         if is_paused and self.paused_remaining > 0:
             mins = self.paused_remaining // 60
-            self._resume_item.label = f"Resume ({mins}m remaining)"
+            self._resume_item.label = f"resume ({mins}m remaining)"
         else:
-            self._resume_item.label = "Resume"
+            self._resume_item.label = "resume"
         self.menu.update_item(self._pause_submenu)
         self.menu.update_item(self._resume_item)
 
@@ -388,7 +399,7 @@ class TrayApp:
         # Update pause remaining in resume button
         if self.status == "paused" and pause_remaining > 0:
             pr_mins = pause_remaining // 60
-            self._resume_item.label = f"Resume ({pr_mins}m remaining)"
+            self._resume_item.label = f"resume ({pr_mins}m remaining)"
             self.menu.update_item(self._resume_item)
 
     def _build_tooltip(self) -> str:
@@ -396,19 +407,19 @@ class TrayApp:
         parts = []
 
         status_html = {
-            "recording": "<b>Recording</b>",
-            "paused": "<b>Paused</b>",
-            "idle": "Idle (screen inactive)",
-            "stopped": "<font color='#cc3333'>Not running</font>",
+            "recording": "<b>observing</b>",
+            "paused": "<b>paused</b>",
+            "idle": "idle (screen inactive)",
+            "stopped": "<font color='#cc3333'>not running</font>",
         }
         parts.append(status_html.get(self.status, self.status))
 
         if self.sync_status == "synced":
-            parts.append("All segments synced")
+            parts.append("all segments synced")
         elif self.sync_progress:
-            parts.append(f"Sync: {self.sync_progress}")
+            parts.append(f"sync: {self.sync_progress}")
         else:
-            parts.append(f"Sync: {self.sync_status}")
+            parts.append(f"sync: {self.sync_status}")
 
         if self.error:
             parts.append(f"<font color='#cc3333'>{self.error}</font>")

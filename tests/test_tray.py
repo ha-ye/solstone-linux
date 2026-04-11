@@ -47,7 +47,7 @@ class TestBuildMenu:
         app._build_menu()
 
         assert isinstance(app._status_item, MenuItem)
-        assert app._status_item.label == "recording"
+        assert app._status_item.label == "observing"
         assert app._status_item.enabled is False
         assert app._sync_item.label == "sync: up to date"
         assert app._pause_submenu.children_display == "submenu"
@@ -150,8 +150,8 @@ class TestBuildTooltip:
 
         tooltip = app._build_tooltip()
 
-        assert "<b>Recording</b>" in tooltip
-        assert "All segments synced" in tooltip
+        assert "<b>observing</b>" in tooltip
+        assert "all segments synced" in tooltip
 
     def test_build_tooltip_stopped(self):
         app = _make_app()
@@ -159,7 +159,7 @@ class TestBuildTooltip:
 
         tooltip = app._build_tooltip()
 
-        assert "Not running" in tooltip
+        assert "not running" in tooltip
 
     def test_build_tooltip_error(self):
         app = _make_app()
@@ -176,7 +176,7 @@ class TestBuildTooltip:
 
         tooltip = app._build_tooltip()
 
-        assert "Sync: 2/5" in tooltip
+        assert "sync: 2/5" in tooltip
 
 
 class TestUpdate:
