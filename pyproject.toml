@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 solstone-linux = "solstone_linux.cli:main"
+solstone-tray = "solstone_linux.tray:main"
 
 [dependency-groups]
 dev = [
