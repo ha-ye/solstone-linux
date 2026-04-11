@@ -258,18 +258,12 @@ class TrayApp:
             label="open config.json",
             callback=self._open_config,
         )
-        settings_copy_agent = MenuItem(
-            label="copy coding agent instructions",
-            callback=self._copy_agent_instructions,
-        )
-
         settings_submenu = MenuItem(
             label="settings",
             children_display="submenu",
         )
         settings_submenu.children = [
             settings_open_config,
-            settings_copy_agent,
         ]
 
         # ── About submenu ──
@@ -298,11 +292,17 @@ class TrayApp:
             label="about",
             children_display="submenu",
         )
+        about_copy_agent = MenuItem(
+            label="copy help agent instructions",
+            callback=self._copy_agent_instructions,
+        )
+
         about_submenu.children = [
             about_version,
             about_website,
             about_source,
             about_privacy,
+            about_copy_agent,
             separator(),
             about_copyright,
         ]
