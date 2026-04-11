@@ -71,7 +71,13 @@ if it's already active and connected, you're done.
    solstone-linux install-service
    ```
 
-6. verify it's running and connected:
+6. install the system tray indicator (optional):
+   ```
+   solstone-linux install-tray
+   ```
+   this installs status icons and an XDG autostart entry so the tray app launches on login. to start it immediately: `solstone-tray &`
+
+7. verify it's running and connected:
    ```
    systemctl --user status solstone-linux
    sol remote list

@@ -7,6 +7,7 @@ Subcommands:
     run             Start capture loop + sync service (default)
     setup           Interactive configuration
     install-service Write systemd user unit, enable, start
+    install-tray    Install tray icons and XDG autostart entry
     status          Show capture and sync state
 """
 
@@ -192,6 +193,67 @@ WantedBy=graphical-session.target
     return 0
 
 
+def cmd_install_tray(args: argparse.Namespace) -> int:
+    """Install tray icons and XDG autostart desktop entry."""
+    binary = shutil.which("solstone-tray")
+    if not binary:
+        print("Error: solstone-tray not found on PATH", file=sys.stderr)
+        print(
+            "Install with: pipx install --system-site-packages solstone-linux",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Source icons from the installed package
+    icon_source = Path(__file__).resolve().parent / "icons" / "hicolor"
+    if not icon_source.is_dir():
+        print(f"Error: bundled icons not found at {icon_source}", file=sys.stderr)
+        return 1
+
+    # Install icons to ~/.local/share/icons/hicolor/
+    icon_dest = Path.home() / ".local" / "share" / "icons" / "hicolor"
+    status_dir = icon_dest / "scalable" / "status"
+    status_dir.mkdir(parents=True, exist_ok=True)
+
+    for svg in sorted((icon_source / "scalable" / "status").iterdir()):
+        if svg.suffix == ".svg":
+            shutil.copy2(svg, status_dir / svg.name)
+            print(f"Installed {status_dir / svg.name}")
+
+    # Copy index.theme only if one doesn't already exist
+    index_dest = icon_dest / "index.theme"
+    if not index_dest.exists():
+        shutil.copy2(icon_source / "index.theme", index_dest)
+        print(f"Wrote {index_dest}")
+
+    # Update icon cache (non-fatal if gtk-update-icon-cache is missing)
+    try:
+        subprocess.run(["gtk-update-icon-cache", str(icon_dest)], check=False)
+    except FileNotFoundError:
+        print("Warning: gtk-update-icon-cache not found. Icon cache not updated.")
+
+    # Write autostart desktop entry
+    autostart_dir = Path.home() / ".config" / "autostart"
+    autostart_dir.mkdir(parents=True, exist_ok=True)
+    desktop_path = autostart_dir / "solstone-tray.desktop"
+
+    desktop_content = f"""\
+[Desktop Entry]
+Type=Application
+Name=Solstone Tray
+Comment=System tray status for solstone observer
+Exec={binary}
+Icon=solstone-recording
+NoDisplay=true
+"""
+
+    desktop_path.write_text(desktop_content)
+    print(f"Wrote {desktop_path}")
+    print("Tray will auto-start on next login.")
+
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show capture and sync state."""
     config = load_config()
@@ -291,6 +353,9 @@ def main() -> None:
     # install-service
     subparsers.add_parser("install-service", help="Install systemd user service")
 
+    # install-tray
+    subparsers.add_parser("install-tray", help="Install tray icons and autostart entry")
+
     # status
     subparsers.add_parser("status", help="Show capture and sync state")
 
@@ -304,6 +369,7 @@ def main() -> None:
         "run": cmd_run,
         "setup": cmd_setup,
         "install-service": cmd_install_service,
+        "install-tray": cmd_install_tray,
         "status": cmd_status,
     }
 
