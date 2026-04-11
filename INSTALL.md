@@ -71,9 +71,28 @@ if it's already active and connected, you're done.
    solstone-linux install-service
    ```
 
-the system tray indicator appears automatically when the observer starts on a graphical session with a StatusNotifierWatcher (KDE Plasma, GNOME with AppIndicator extension). no separate install step needed.
+the system tray icon appears automatically when the observer starts in a graphical session. on KDE Plasma this works out of the box. on GNOME, the AppIndicator extension is required — see step 6.
 
-6. verify it's running and connected:
+6. **GNOME only:** install the AppIndicator extension for tray icon support. KDE users can skip this.
+
+   GNOME removed native system tray support. the AppIndicator extension restores it via the same StatusNotifierItem protocol KDE uses. without it, the observer runs fine but has no tray icon.
+
+   **ubuntu:** already installed and enabled by default — skip this step.
+
+   **fedora:**
+   ```
+   sudo dnf install gnome-shell-extension-appindicator
+   ```
+   then log out and back in, or restart GNOME Shell (Alt+F2, type `r`, enter). enable the extension in GNOME Extensions app if not auto-enabled.
+
+   **arch:**
+   ```
+   sudo pacman -S gnome-shell-extension-appindicator
+   ```
+
+   to check if it's working: `gnome-extensions list | grep appindicator` should show it. if the tray icon still doesn't appear, verify it's enabled: `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com`
+
+7. verify it's running and connected:
    ```
    systemctl --user status solstone-linux
    sol remote list
@@ -81,5 +100,6 @@ the system tray indicator appears automatically when the observer starts on a gr
 
 ## notes
 
-- activity detection (idle timeout, screen lock, power save) requires a GNOME desktop. other desktops capture screen and audio fine but won't get activity-based segment boundaries.
+- activity detection (idle timeout, screen lock, power save) works on both GNOME and KDE. other desktops capture screen and audio fine but may not get activity-based segment boundaries.
 - if pipx is not installed: `pip install --user pipx` or install via your package manager.
+- the tray icon uses the StatusNotifierItem (SNI) D-Bus protocol. it works on KDE natively and GNOME with the AppIndicator extension. if no SNI host is available, the observer runs normally without a tray icon.

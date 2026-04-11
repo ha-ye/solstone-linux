@@ -55,7 +55,7 @@ class TestBuildMenu:
         assert len(app._pause_submenu.children) == 4
         assert app._resume_item.visible is False
         assert app.menu._root.children[1].item_type == separator().item_type
-        assert len(app.menu._root.children) == 9
+        assert len(app.menu._root.children) == 10
 
 
 class TestUpdateStatus:
@@ -169,7 +169,7 @@ class TestBuildTooltip:
 
         tooltip = app._build_tooltip()
 
-        assert "<b>observing</b>" in tooltip
+        assert "observing" in tooltip
         assert "all segments synced" in tooltip
 
     def test_build_tooltip_stopped(self):

@@ -188,7 +188,7 @@ class DBusMenu(ServiceInterface):
 
     @method()
     def AboutToShow(self, item_id: "i") -> "b":
-        return False  # no layout update needed
+        return True  # tell host to re-read layout (fresh labels on open)
 
     @method()
     def AboutToShowGroup(self, ids: "ai") -> "aiai":

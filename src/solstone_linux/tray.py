@@ -268,7 +268,6 @@ class TrayApp:
             children_display="submenu",
         )
         settings_submenu.children = [
-            open_journal,
             settings_open_config,
             settings_copy_agent,
         ]
@@ -322,6 +321,7 @@ class TrayApp:
                 self._pause_submenu,
                 self._resume_item,
                 separator(),
+                open_journal,
                 settings_submenu,
                 about_submenu,
                 separator(),
@@ -439,16 +439,16 @@ class TrayApp:
                 self._resume_item.label = new_resume
 
     def _build_tooltip(self) -> str:
-        """Build rich tooltip body (HTML on KDE)."""
+        """Build plain-text tooltip body (cross-DE compatible)."""
         parts = []
 
-        status_html = {
-            "recording": "<b>observing</b>",
-            "paused": "<b>paused</b>",
+        status_labels = {
+            "recording": "observing",
+            "paused": "paused",
             "idle": "idle (screen inactive)",
-            "stopped": "<font color='#cc3333'>not running</font>",
+            "stopped": "not running",
         }
-        parts.append(status_html.get(self.status, self.status))
+        parts.append(status_labels.get(self.status, self.status))
 
         if self.sync_status == "synced":
             parts.append("all segments synced")
@@ -458,9 +458,9 @@ class TrayApp:
             parts.append(f"sync: {self.sync_status}")
 
         if self.error:
-            parts.append(f"<font color='#cc3333'>{self.error}</font>")
+            parts.append(self.error)
 
-        return "<br>".join(parts)
+        return "\n".join(parts)
 
     # ── Menu callbacks ──
 
