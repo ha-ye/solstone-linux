@@ -118,6 +118,7 @@ class Observer:
 
         # D-Bus service interface
         self._dbus_service = None
+        self._tray = None
 
     async def setup(self) -> bool:
         """Initialize audio devices, DBus connection, and sync service."""
@@ -168,6 +169,21 @@ class Observer:
         await self.bus.request_name(BUS_NAME)
         self._sync._dbus_service = self._dbus_service
         logger.info("D-Bus service exported as %s", BUS_NAME)
+
+        # Initialize system tray (graceful: skip if no StatusNotifierWatcher)
+        try:
+            from .tray import TrayApp
+
+            tray = TrayApp(self, self.bus)
+            started = await tray.start()
+            if started:
+                self._tray = tray
+                logger.info("System tray active")
+            else:
+                logger.info("System tray unavailable (no StatusNotifierWatcher)")
+        except Exception as e:
+            logger.info("System tray disabled: %s", e)
+
         logger.info("Sync service initialized")
 
         return True
@@ -422,6 +438,27 @@ class Observer:
             stream=self.stream,
         )
 
+    def pause(self, duration_seconds: int):
+        """Pause capture. duration_seconds=0 means indefinite."""
+        self._paused = True
+        if duration_seconds > 0:
+            self._pause_until = time.monotonic() + duration_seconds
+        else:
+            self._pause_until = 0.0
+        if self._dbus_service:
+            self._dbus_service.StatusChanged("paused")
+        logger.info("Paused for %ss", duration_seconds)
+
+    def resume(self):
+        """Resume capture from pause."""
+        self._paused = False
+        self._pause_until = 0.0
+        if self._dbus_service:
+            self._dbus_service.StatusChanged(
+                "recording" if self.current_mode == MODE_SCREENCAST else "idle"
+            )
+        logger.info("Resumed")
+
     async def main_loop(self):
         """Run the main observer loop with background sync."""
         logger.info(f"Starting observer loop (interval={self.interval}s)")
@@ -481,6 +518,14 @@ class Observer:
                             else "idle"
                         )
                     logger.info("Auto-resumed from timed pause")
+                    if self._tray:
+                        try:
+                            self._tray.update()
+                        except Exception:
+                            logger.warning(
+                                "Tray update failed, disabling tray", exc_info=True
+                            )
+                            self._tray = None
 
                 # Handle paused state
                 if self._paused:
@@ -596,9 +641,25 @@ class Observer:
                     if mode_changed and self._dbus_service:
                         status = "recording" if new_mode == MODE_SCREENCAST else "idle"
                         self._dbus_service.StatusChanged(status)
+                        if self._tray:
+                            try:
+                                self._tray.update()
+                            except Exception:
+                                logger.warning(
+                                    "Tray update failed, disabling tray", exc_info=True
+                                )
+                                self._tray = None
 
                 # Emit status event
                 self.emit_status()
+                if self._tray:
+                    try:
+                        self._tray.update()
+                    except Exception:
+                        logger.warning(
+                            "Tray update failed, disabling tray", exc_info=True
+                        )
+                        self._tray = None
         finally:
             # Cleanup on exit
             logger.info("Observer loop stopped, cleaning up...")

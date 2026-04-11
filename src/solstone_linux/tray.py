@@ -1,29 +1,24 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
-"""solstone tray app — pure D-Bus SNI implementation.
+"""solstone tray app — in-process D-Bus SNI component.
 
-Connects to the observer backend over D-Bus and displays a system
-tray icon with status, menus, and tooltip. No GUI toolkit dependency.
+Exports the tray icon, menu, and tooltip on the observer's existing
+session bus connection. No separate tray process is required.
 """
 
 import asyncio
 import logging
 import os
-import signal
 import subprocess
-import sys
+import time
 from pathlib import Path
 
 from dbus_next.aio import MessageBus
 
-from .config import load_config
 from .dbusmenu import DBusMenu, MenuItem, separator
 from .sni import StatusNotifierItem, register_with_watcher
 
 log = logging.getLogger(__name__)
-
-BACKEND_BUS = "org.solpbc.solstone.Observer1"
-BACKEND_PATH = "/org/solpbc/solstone/Observer1"
 
 # Icon names — these reference SVGs in our icon theme
 ICONS = {
@@ -48,17 +43,16 @@ SOURCE_DIR = str(Path(__file__).resolve().parent)
 
 
 class TrayApp:
-    """Main tray application coordinating SNI, menu, and backend."""
+    """In-process tray component — exports SNI on the observer's bus."""
 
-    def __init__(self):
-        self.config = load_config()
-        self.bus: MessageBus = None
+    def __init__(self, observer, bus):
+        self._observer = observer
+        self.config = observer.config
+        self.bus: MessageBus = bus
         self.sni = StatusNotifierItem("solstone-observer")
         self.menu = DBusMenu()
-        self.backend = None
-        self.backend_props = None
 
-        # State cache
+        # State cache (for change detection)
         self.status = "recording"
         self.sync_status = "synced"
         self.sync_progress = ""
@@ -77,8 +71,6 @@ class TrayApp:
         self._resume_item: MenuItem = None
 
     async def start(self):
-        self.bus = await MessageBus().connect()
-
         pid = os.getpid()
         bus_name = f"org.kde.StatusNotifierItem-{pid}-1"
         await self.bus.request_name(bus_name)
@@ -110,27 +102,66 @@ class TrayApp:
         # Build menu
         self._build_menu()
 
-        # Register with watcher (with retries)
+        # Register with watcher (3 attempts)
         registered = False
-        for attempt in range(6):
+        for attempt in range(3):
             registered = await register_with_watcher(self.bus, bus_name)
             if registered:
                 break
-            if attempt < 5:
-                await asyncio.sleep(2)
-                log.info(f"Retry {attempt + 1}/5...")
+            if attempt < 2:
+                await asyncio.sleep(1)
+                log.info(f"SNI watcher retry {attempt + 1}/2...")
 
         if not registered:
-            log.error("Could not register with StatusNotifierWatcher.")
+            log.info("No StatusNotifierWatcher available")
             return False
 
-        # Connect to backend
-        await self._connect_backend()
-
-        # Start background tasks
-        asyncio.create_task(self._poll_backend())
-
         return True
+
+    def update(self):
+        """Read observer state and update tray display."""
+        obs = self._observer
+
+        # Determine status
+        if obs._paused:
+            status = "paused"
+        elif obs.current_mode == "screencast":
+            status = "recording"
+        else:
+            status = "idle"
+
+        # Sync status
+        sync_status = "synced"
+        sync_progress = ""
+        if obs._sync:
+            sync_status = obs._sync.sync_status
+            sync_progress = obs._sync.sync_progress
+
+        # Segment timer
+        if obs._paused or obs.segment_dir is None:
+            segment_timer = 0
+        else:
+            remaining = obs.interval - (time.monotonic() - obs.start_at_mono)
+            segment_timer = max(0, int(remaining))
+
+        # Pause remaining
+        if not obs._paused or obs._pause_until <= 0:
+            pause_remaining = 0
+        else:
+            pause_remaining = max(0, int(obs._pause_until - time.monotonic()))
+
+        # Get stats
+        if obs._dbus_service:
+            try:
+                raw_stats = obs._dbus_service.GetStats()
+                self.stats = {k: v.value for k, v in raw_stats.items()}
+            except Exception:
+                pass
+
+        self._update_status(status)
+        self._update_sync(sync_status, sync_progress)
+        self._update_live_stats(segment_timer, pause_remaining)
+        self.paused_remaining = pause_remaining
 
     def _build_menu(self):
         """Build the full tray menu structure."""
@@ -254,65 +285,6 @@ class TrayApp:
             ]
         )
 
-    async def _connect_backend(self):
-        """Connect to the observer's D-Bus interface."""
-        try:
-            introspection = await self.bus.introspect(BACKEND_BUS, BACKEND_PATH)
-            proxy = self.bus.get_proxy_object(BACKEND_BUS, BACKEND_PATH, introspection)
-            self.backend = proxy.get_interface("org.solpbc.solstone.Observer1")
-            self.backend_props = proxy.get_interface("org.freedesktop.DBus.Properties")
-
-            # Subscribe to signals
-            self.backend.on_status_changed(self._on_status_changed)
-            self.backend.on_sync_progress_changed(self._on_sync_progress_changed)
-            self.backend.on_error_occurred(self._on_error_occurred)
-
-            log.info("Connected to observer backend")
-        except Exception as e:
-            log.warning(f"Backend not available: {e}")
-            self._update_status("stopped")
-
-    async def _poll_backend(self):
-        """Poll backend for state updates every 5 seconds."""
-        while True:
-            await asyncio.sleep(5)
-            try:
-                if self.backend is None:
-                    await self._connect_backend()
-                    continue
-
-                status = await self.backend.get_status()
-                sync_status = await self.backend.get_sync_status()
-                sync_progress = await self.backend.get_sync_progress()
-                error = await self.backend.get_error()
-                pause_remaining = await self.backend.get_pause_remaining()
-                segment_timer = await self.backend.get_segment_timer()
-
-                # Get stats
-                try:
-                    stats = await self.backend.call_get_stats()
-                    self.stats = {k: v.value for k, v in stats.items()}
-                except Exception:
-                    pass
-
-                self._update_status(status)
-                self._update_sync(sync_status, sync_progress)
-                self._update_live_stats(segment_timer, pause_remaining)
-                self.paused_remaining = pause_remaining
-
-                if error and error != self.error:
-                    self.error = error
-                    log.info(f"Error: {error}")
-                elif not error and self.error:
-                    self.error = ""
-                    log.info("Error cleared")
-
-            except Exception as e:
-                log.warning(f"Poll failed: {e}")
-                self.backend = None
-                self.backend_props = None
-                self._update_status("stopped")
-
     def _update_status(self, status: str):
         """Update tray icon and menu for observer status."""
         if status == self.status:
@@ -359,7 +331,7 @@ class TrayApp:
         else:
             self.sni.set_status("Active")
 
-        log.info(f"Status \u2192 {status} (icon: {icon})")
+        log.info(f"Status -> {status} (icon: {icon})")
 
     def _update_sync(self, sync_status: str, progress: str):
         """Update sync status display."""
@@ -443,48 +415,15 @@ class TrayApp:
 
         return "<br>".join(parts)
 
-    # ── Signal handlers ──
-
-    def _on_status_changed(self, status: str):
-        self._update_status(status)
-
-    def _on_sync_progress_changed(self, progress: str):
-        if ":" in progress:
-            sync_status, sync_progress = progress.split(":", 1)
-            self._update_sync(sync_status, sync_progress)
-
-    def _on_error_occurred(self, message: str):
-        self.error = message
-        if message:
-            self.sni.set_status("NeedsAttention")
-            self.sni.set_icon(ICONS["error"])
-        else:
-            self.sni.set_status("Active")
-            self._update_status(self.status)
-
     # ── Menu callbacks ──
 
     def _pause(self, seconds: int):
         log.info(f"Pause: {seconds}s")
-        if self.backend:
-            asyncio.create_task(self._do_pause(seconds))
-
-    async def _do_pause(self, seconds: int):
-        try:
-            await self.backend.call_pause(seconds)
-        except Exception as e:
-            log.error(f"Pause failed: {e}")
+        self._observer.pause(seconds)
 
     def _resume(self):
         log.info("Resume")
-        if self.backend:
-            asyncio.create_task(self._do_resume())
-
-    async def _do_resume(self):
-        try:
-            await self.backend.call_resume()
-        except Exception as e:
-            log.error(f"Resume failed: {e}")
+        self._observer.resume()
 
     def _open_journal(self):
         log.info("Opening journal")
@@ -534,7 +473,7 @@ class TrayApp:
             proc.communicate(text.encode())
             log.info("Copied to clipboard")
         except FileNotFoundError:
-            # Fallback: try xdg-open or xsel
+            # Fallback: try xsel
             try:
                 proc = subprocess.Popen(
                     ["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE
@@ -554,41 +493,5 @@ class TrayApp:
             log.error(f"Failed to open URL: {e}")
 
     def _quit(self):
-        log.info("Quit requested")
-        asyncio.get_event_loop().stop()
-
-    async def stop(self):
-        if self.bus:
-            self.bus.disconnect()
-
-
-async def _async_main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    app = TrayApp()
-
-    loop = asyncio.get_event_loop()
-    stop = loop.create_future()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set_result, None)
-
-    started = await app.start()
-    if not started:
-        sys.exit(1)
-
-    log.info("Tray app running. Ctrl+C to stop.")
-    await stop
-    await app.stop()
-    log.info("Stopped.")
-
-
-def main():
-    asyncio.run(_async_main())
-
-
-if __name__ == "__main__":
-    main()
+        log.info("Quit requested via tray")
+        self._observer.running = False

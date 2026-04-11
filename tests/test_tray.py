@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
-from unittest.mock import MagicMock, patch
+import time
+from pathlib import Path
+from unittest.mock import MagicMock
 
 from solstone_linux.config import Config
 from solstone_linux.dbusmenu import MenuItem, separator
@@ -13,13 +15,23 @@ def _make_app(tmp_path=None):
     if tmp_path:
         config.base_dir = tmp_path
     config.server_url = "https://test.example.com"
-    with patch("solstone_linux.tray.load_config", return_value=config):
-        app = TrayApp()
+    observer = MagicMock()
+    observer.config = config
+    observer._paused = False
+    observer._pause_until = 0.0
+    observer.current_mode = "screencast"
+    observer.segment_dir = None
+    observer.interval = 300
+    observer.start_at_mono = time.monotonic()
+    observer._sync = None
+    observer._dbus_service = None
+    bus = MagicMock()
+    app = TrayApp(observer, bus)
     return app
 
 
 class TestTrayInit:
-    def test_make_app_loads_config(self):
+    def test_make_app_uses_observer_config(self):
         app = _make_app()
 
         assert isinstance(app, TrayApp)
@@ -167,33 +179,31 @@ class TestBuildTooltip:
         assert "Sync: 2/5" in tooltip
 
 
-class TestSignalHandlers:
-    def test_on_sync_progress_changed_parses_status_and_progress(self):
+class TestUpdate:
+    def test_update_reads_observer_state(self):
         app = _make_app()
         app._build_menu()
+        app._observer.current_mode = "screencast"
+        app._observer._paused = False
+        app._observer.segment_dir = Path("/tmp/test.incomplete")
+        app._observer.start_at_mono = time.monotonic() - 60
+        app._observer.interval = 300
 
-        app._on_sync_progress_changed("uploading:3/10 segments")
+        app.update()
 
-        assert app.sync_status == "uploading"
-        assert app.sync_progress == "3/10 segments"
+        assert app.status == "recording"
+        assert app._segment_item.label.startswith(("segment: 4:", "segment: 3:"))
 
-    def test_on_sync_progress_changed_without_colon_keeps_state(self):
+    def test_update_shows_paused(self):
         app = _make_app()
         app._build_menu()
-        app._on_sync_progress_changed("uploading:3/10 segments")
+        app._observer._paused = True
+        app._observer._pause_until = time.monotonic() + 600
 
-        app._on_sync_progress_changed("no-colon")
-
-        assert app.sync_status == "uploading"
-        assert app.sync_progress == "3/10 segments"
-
-    def test_on_status_changed_updates_status(self):
-        app = _make_app()
-        app._build_menu()
-
-        app._on_status_changed("paused")
+        app.update()
 
         assert app.status == "paused"
+        assert app._resume_item.visible is True
 
 
 class TestConfigIntegration:

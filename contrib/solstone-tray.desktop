@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Solstone Tray
-Comment=System tray status for solstone observer
-Exec=solstone-tray
-Icon=solstone-recording
-NoDisplay=true

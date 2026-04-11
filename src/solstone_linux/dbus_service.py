@@ -84,22 +84,12 @@ class ObserverService(ServiceInterface):
 
     @method()
     def Pause(self, duration_seconds: "i") -> "s":
-        self._observer._paused = True
-        if duration_seconds > 0:
-            self._observer._pause_until = time.monotonic() + duration_seconds
-        else:
-            self._observer._pause_until = 0.0
-        self.StatusChanged("paused")
-        logger.info("Pause requested: %ss", duration_seconds)
+        self._observer.pause(duration_seconds)
         return "ok"
 
     @method()
     def Resume(self) -> "s":
-        self._observer._paused = False
-        self._observer._pause_until = 0.0
-        self.StatusChanged(
-            "recording" if self._observer.current_mode == "screencast" else "idle"
-        )
+        self._observer.resume()
         return "ok"
 
     @method()

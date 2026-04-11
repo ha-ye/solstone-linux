@@ -72,48 +72,31 @@ class TestObserverServiceStatus:
 
 
 class TestPauseResume:
-    def test_pause_sets_state(self):
+    def test_pause_calls_observer(self):
         observer = _make_observer()
         service = ObserverService(observer)
-        before = time.monotonic()
 
         result = _call_method(service, "Pause", 30)
 
         assert result == "ok"
-        assert observer._paused is True
-        assert before + 29 <= observer._pause_until <= before + 31
+        observer.pause.assert_called_once_with(30)
 
-    def test_pause_indefinite(self):
+    def test_pause_indefinite_calls_observer(self):
         observer = _make_observer()
         service = ObserverService(observer)
 
         _call_method(service, "Pause", 0)
 
-        assert observer._paused is True
-        assert observer._pause_until == 0.0
+        observer.pause.assert_called_once_with(0)
 
-    def test_resume_clears_state(self):
+    def test_resume_calls_observer(self):
         observer = _make_observer()
-        service = ObserverService(observer)
-        _call_method(service, "Pause", 30)
-
-        result = _call_method(service, "Resume")
-
-        assert result == "ok"
-        assert observer._paused is False
-        assert observer._pause_until == 0.0
-
-    def test_resume_returns_mode(self):
-        observer = _make_observer()
-        observer.current_mode = "idle"
-        observer._paused = True
-        observer._pause_until = time.monotonic() + 30
         service = ObserverService(observer)
 
         result = _call_method(service, "Resume")
 
         assert result == "ok"
-        assert _get_prop(service, "Status") == "idle"
+        observer.resume.assert_called_once()
 
 
 class TestAutoResume:
