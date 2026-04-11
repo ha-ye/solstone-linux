@@ -307,10 +307,10 @@ class TrayApp:
             about_copyright,
         ]
 
-        # ── Quit ──
-        quit_item = MenuItem(
-            label="quit solstone observer",
-            callback=self._quit,
+        # ── Service hint ──
+        service_hint = MenuItem(
+            label="managed via systemctl",
+            enabled=False,
         )
 
         # ── Assemble full menu ──
@@ -325,7 +325,7 @@ class TrayApp:
                 settings_submenu,
                 about_submenu,
                 separator(),
-                quit_item,
+                service_hint,
             ]
         )
 
@@ -526,7 +526,3 @@ class TrayApp:
             )
         except Exception as e:
             log.error(f"Failed to open URL: {e}")
-
-    def _quit(self):
-        log.info("Quit requested via tray")
-        self._observer.running = False
