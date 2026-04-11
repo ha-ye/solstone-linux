@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from solstone_linux.config import Config
+from solstone_linux.observer import Observer
 from solstone_linux.recovery import write_segment_metadata
 
 
@@ -37,3 +38,21 @@ class TestSegmentDirStructure:
         config = Config(base_dir=tmp_path)
         assert str(config.restore_token_path).endswith("restore_token")
         assert "config" in str(config.restore_token_path)
+
+
+class TestPauseResumeState:
+    def test_observer_init_not_paused(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+
+        observer = Observer(config)
+
+        assert observer._paused is False
+        assert observer._pause_until == 0.0
+
+    def test_pause_state_fields_exist(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+
+        observer = Observer(config)
+
+        assert hasattr(observer, "_paused")
+        assert hasattr(observer, "_pause_until")

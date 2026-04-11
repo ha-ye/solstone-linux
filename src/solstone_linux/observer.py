@@ -112,6 +112,13 @@ class Observer:
         # Mute state at segment start (determines save format)
         self.segment_is_muted = False
 
+        # Pause state
+        self._paused = False
+        self._pause_until = 0.0
+
+        # D-Bus service interface
+        self._dbus_service = None
+
     async def setup(self) -> bool:
         """Initialize audio devices, DBus connection, and sync service."""
         # Detect audio devices with retry (devices may still be initializing)
@@ -153,6 +160,14 @@ class Observer:
         if self.config.server_url:
             self._client.ensure_registered(self.config)
         self._sync = SyncService(self.config, self._client)
+
+        from .dbus_service import BUS_NAME, OBJECT_PATH, ObserverService
+
+        self._dbus_service = ObserverService(self)
+        self.bus.export(OBJECT_PATH, self._dbus_service)
+        await self.bus.request_name(BUS_NAME)
+        self._sync._dbus_service = self._dbus_service
+        logger.info("D-Bus service exported as %s", BUS_NAME)
         logger.info("Sync service initialized")
 
         return True
@@ -451,6 +466,62 @@ class Observer:
             while self.running:
                 await asyncio.sleep(CHUNK_DURATION)
 
+                # Check auto-resume from timed pause
+                if (
+                    self._paused
+                    and self._pause_until > 0
+                    and time.monotonic() >= self._pause_until
+                ):
+                    self._paused = False
+                    self._pause_until = 0.0
+                    if self._dbus_service:
+                        self._dbus_service.StatusChanged(
+                            "recording"
+                            if self.current_mode == MODE_SCREENCAST
+                            else "idle"
+                        )
+                    logger.info("Auto-resumed from timed pause")
+
+                # Handle paused state
+                if self._paused:
+                    if self.segment_dir:
+                        if self.current_mode == MODE_SCREENCAST:
+                            await self.screencaster.stop()
+                            self.current_streams = []
+                        if self.threshold_hits >= MIN_HITS_FOR_SAVE:
+                            self._save_audio_segment(
+                                self.segment_dir, self.segment_is_muted
+                            )
+                        self.accumulated_audio_buffer = np.array(
+                            [], dtype=np.float32
+                        ).reshape(0, 2)
+                        self.threshold_hits = 0
+                        segment_key = self._finalize_segment()
+                        self.segment_dir = None
+                        if segment_key and self._sync:
+                            self._sync.trigger()
+                    self.audio_recorder.get_buffers()
+                    self.emit_status()
+                    continue
+
+                # Resume: start new segment if needed (segment_dir is None after pause)
+                if self.segment_dir is None:
+                    try:
+                        new_mode = await self.check_activity_status()
+                    except Exception:
+                        new_mode = self.current_mode
+                    self.segment_is_muted = self.cached_is_muted
+                    self.current_mode = new_mode
+                    if new_mode == MODE_SCREENCAST and not self.cached_screen_locked:
+                        try:
+                            await self.initialize_screencast()
+                        except RuntimeError:
+                            self._start_segment()
+                    else:
+                        self._start_segment()
+                    self.emit_status()
+                    continue
+
                 # Check activity status and determine new mode
                 try:
                     new_mode = await self.check_activity_status()
@@ -522,6 +593,9 @@ class Observer:
                         f"hits={self.threshold_hits}/{MIN_HITS_FOR_SAVE}"
                     )
                     await self.handle_boundary(new_mode)
+                    if mode_changed and self._dbus_service:
+                        status = "recording" if new_mode == MODE_SCREENCAST else "idle"
+                        self._dbus_service.StatusChanged(status)
 
                 # Emit status event
                 self.emit_status()

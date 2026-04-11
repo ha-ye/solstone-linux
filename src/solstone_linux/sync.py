@@ -60,6 +60,9 @@ class SyncService:
         self._last_full_sync: float = 0
         self._running = True
         self._trigger = asyncio.Event()
+        self.sync_status = "synced"
+        self.sync_progress = ""
+        self._dbus_service = None
 
         # Load synced days cache
         self._load_synced_days()
@@ -121,6 +124,14 @@ class SyncService:
         self._running = False
         self._trigger.set()
 
+    def _set_sync_status(self, status: str, progress: str = "") -> None:
+        """Update sync status and emit D-Bus signal if changed."""
+        changed = self.sync_status != status or self.sync_progress != progress
+        self.sync_status = status
+        self.sync_progress = progress
+        if changed and self._dbus_service:
+            self._dbus_service.SyncProgressChanged(f"{status}:{progress}")
+
     async def run(self) -> None:
         """Main sync loop — waits for triggers, then syncs."""
         # Prune on startup
@@ -141,6 +152,7 @@ class SyncService:
 
                 if self._circuit_open:
                     if self._circuit_open_permanent:
+                        self._set_sync_status("offline")
                         logger.warning(
                             "Circuit breaker open (permanent) — skipping sync"
                         )
@@ -149,11 +161,15 @@ class SyncService:
                     elapsed = time.monotonic() - self._circuit_open_since
                     if elapsed < self._circuit_cooldown:
                         remaining = self._circuit_cooldown - elapsed
+                        self._set_sync_status(
+                            "retrying", f"{remaining:.0f}s until probe"
+                        )
                         logger.warning(
                             f"Circuit breaker open — {remaining:.0f}s until probe"
                         )
                         continue
 
+                    self._set_sync_status("retrying", "probing server...")
                     logger.info("Circuit breaker half-open — probing server")
                     today = datetime.now().strftime("%Y%m%d")
                     probe_result = await asyncio.to_thread(
@@ -167,12 +183,17 @@ class SyncService:
                         self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
                         self._consecutive_failures = 0
                         self._last_error_type = None
+                        self._set_sync_status("syncing")
                     else:
                         self._circuit_cooldown = min(
                             self._circuit_cooldown * CIRCUIT_COOLDOWN_FACTOR,
                             CIRCUIT_COOLDOWN_MAX,
                         )
                         self._circuit_open_since = time.monotonic()
+                        self._set_sync_status(
+                            "retrying",
+                            f"probe failed, next in {self._circuit_cooldown:.0f}s",
+                        )
                         logger.warning(
                             f"Circuit breaker probe failed — next probe in {self._circuit_cooldown:.0f}s"
                         )
@@ -182,7 +203,9 @@ class SyncService:
                 now = time.time()
                 force_full = (now - self._last_full_sync) > 86400
 
+                self._set_sync_status("syncing")
                 await self._sync(force_full=force_full)
+                self._set_sync_status("synced")
 
                 if force_full:
                     self._last_full_sync = now
@@ -218,6 +241,7 @@ class SyncService:
             local_segments = segments_by_day[day]
 
             # Query server for existing segments
+            self._set_sync_status("syncing", f"checking {day}...")
             server_segments = await asyncio.to_thread(
                 self._client.get_server_segments, day
             )
@@ -243,6 +267,7 @@ class SyncService:
                     continue
 
                 any_needed_upload = True
+                self._set_sync_status("uploading", f"uploading {segment_key}")
                 success = await self._upload_segment(day, segment_dir)
 
                 if not success:
@@ -257,6 +282,7 @@ class SyncService:
                             f"{self._last_error_type.value if self._last_error_type else 'unknown'} "
                             f"failures (threshold: {threshold})"
                         )
+                        self._set_sync_status("retrying")
                         break
                 else:
                     self._consecutive_failures = 0
