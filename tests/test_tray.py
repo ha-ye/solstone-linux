@@ -54,7 +54,7 @@ class TestBuildMenu:
         assert len(app._pause_submenu.children) == 4
         assert app._resume_item.visible is False
         assert app.menu._root.children[1].item_type == separator().item_type
-        assert len(app.menu._root.children) == 12
+        assert len(app.menu._root.children) == 9
 
 
 class TestUpdateStatus:

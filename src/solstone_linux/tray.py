@@ -12,6 +12,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from datetime import datetime
 
 from dbus_next.aio import MessageBus
 
@@ -60,6 +61,7 @@ class TrayApp:
         self.error = ""
         self.paused_remaining = 0
         self.stats = {}
+        self._last_stats_time = 0.0
 
         # Menu item references for dynamic updates
         self._status_item: MenuItem = None
@@ -151,13 +153,51 @@ class TrayApp:
         else:
             pause_remaining = max(0, int(obs._pause_until - time.monotonic()))
 
-        # Get stats
-        if obs._dbus_service:
+        # Compute stats (throttled — filesystem walk every 60s)
+        now = time.monotonic()
+        if now - self._last_stats_time >= 60:
+            self._last_stats_time = now
+            captures_today = 0
+            total_size = 0
+            today = datetime.now().strftime("%Y%m%d")
+            captures_dir = obs.config.captures_dir
+
             try:
-                raw_stats = obs._dbus_service.GetStats()
-                self.stats = {k: v.value for k, v in raw_stats.items()}
-            except Exception:
+                if captures_dir.exists():
+                    for day_dir in captures_dir.iterdir():
+                        if not day_dir.is_dir():
+                            continue
+                        for stream_dir in day_dir.iterdir():
+                            if not stream_dir.is_dir():
+                                continue
+                            for seg_dir in stream_dir.iterdir():
+                                if not seg_dir.is_dir():
+                                    continue
+                                if seg_dir.name.endswith(".incomplete"):
+                                    continue
+                                if seg_dir.name.endswith(".failed"):
+                                    continue
+                                if day_dir.name == today:
+                                    captures_today += 1
+                                for file_path in seg_dir.iterdir():
+                                    if file_path.is_file():
+                                        total_size += file_path.stat().st_size
+            except OSError:
                 pass
+
+            synced_days = 0
+            if obs._sync:
+                synced_days = len(obs._sync._synced_days)
+
+            total_size_mb = int(total_size / (1024 * 1024))
+            uptime_seconds = int(time.monotonic() - obs.start_at_mono)
+
+            self.stats = {
+                "captures_today": captures_today,
+                "total_size_mb": total_size_mb,
+                "synced_days": synced_days,
+                "uptime_seconds": uptime_seconds,
+            }
 
         self._update_status(status)
         self._update_sync(sync_status, sync_progress)
@@ -213,11 +253,6 @@ class TrayApp:
             callback=self._open_journal,
         )
 
-        open_captures = MenuItem(
-            label="show captures",
-            callback=self._open_captures,
-        )
-
         # ── Settings submenu ──
         settings_open_config = MenuItem(
             label="open config.json",
@@ -233,6 +268,7 @@ class TrayApp:
             children_display="submenu",
         )
         settings_submenu.children = [
+            open_journal,
             settings_open_config,
             settings_copy_agent,
         ]
@@ -282,9 +318,6 @@ class TrayApp:
         self.menu.set_menu(
             [
                 status_submenu,
-                separator(),
-                open_journal,
-                open_captures,
                 separator(),
                 self._pause_submenu,
                 self._resume_item,
@@ -378,7 +411,7 @@ class TrayApp:
         self._segment_item.label = f"segment: {mins}:{secs:02d} remaining"
         self.menu.update_item(self._segment_item)
 
-        # Stats from GetStats
+        # Stats (computed in update())
         if self.stats:
             captures = self.stats.get("captures_today", 0)
             size_mb = self.stats.get("total_size_mb", 0)
@@ -439,18 +472,6 @@ class TrayApp:
     def _open_journal(self):
         log.info("Opening journal")
         self._open_url(self.config.server_url or "https://journal.solstone.app")
-
-    def _open_captures(self):
-        capture_dir = str(self.config.captures_dir)
-        log.info(f"Opening captures: {capture_dir}")
-        try:
-            subprocess.Popen(
-                ["xdg-open", capture_dir],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as e:
-            log.error(f"Failed to open file manager: {e}")
 
     def _open_config(self):
         config_path = str(self.config.config_path)
