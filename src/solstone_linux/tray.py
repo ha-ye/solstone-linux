@@ -190,7 +190,7 @@ class TrayApp:
                 synced_days = len(obs._sync._synced_days)
 
             total_size_mb = int(total_size / (1024 * 1024))
-            uptime_seconds = int(time.monotonic() - obs.start_at_mono)
+            uptime_seconds = int(time.monotonic() - obs._start_mono)
 
             self.stats = {
                 "captures_today": captures_today,
@@ -408,8 +408,10 @@ class TrayApp:
         # Segment timer
         mins = segment_timer // 60
         secs = segment_timer % 60
-        self._segment_item.label = f"segment: {mins}:{secs:02d} remaining"
-        self.menu.update_item(self._segment_item)
+        new_label = f"segment: {mins}:{secs:02d} remaining"
+        if self._segment_item.label != new_label:
+            self._segment_item.label = new_label
+            self.menu.update_item(self._segment_item)
 
         # Stats (computed in update())
         if self.stats:
@@ -418,22 +420,30 @@ class TrayApp:
             synced_days = self.stats.get("synced_days", 0)
             uptime = self.stats.get("uptime_seconds", 0)
 
-            self._cache_item.label = f"cache: {size_mb} MB ({synced_days} days synced)"
-            self._captures_item.label = f"captures today: {captures} segments"
+            new_cache = f"cache: {size_mb} MB ({synced_days} days synced)"
+            new_captures = f"captures today: {captures} segments"
 
             hours = uptime // 3600
             mins_up = (uptime % 3600) // 60
-            self._uptime_item.label = f"uptime: {hours}h {mins_up}m"
+            new_uptime = f"uptime: {hours}h {mins_up}m"
 
-            self.menu.update_item(self._cache_item)
-            self.menu.update_item(self._captures_item)
-            self.menu.update_item(self._uptime_item)
+            if self._cache_item.label != new_cache:
+                self._cache_item.label = new_cache
+                self.menu.update_item(self._cache_item)
+            if self._captures_item.label != new_captures:
+                self._captures_item.label = new_captures
+                self.menu.update_item(self._captures_item)
+            if self._uptime_item.label != new_uptime:
+                self._uptime_item.label = new_uptime
+                self.menu.update_item(self._uptime_item)
 
         # Update pause remaining in resume button
         if self.status == "paused" and pause_remaining > 0:
             pr_mins = pause_remaining // 60
-            self._resume_item.label = f"resume ({pr_mins}m remaining)"
-            self.menu.update_item(self._resume_item)
+            new_resume = f"resume ({pr_mins}m remaining)"
+            if self._resume_item.label != new_resume:
+                self._resume_item.label = new_resume
+                self.menu.update_item(self._resume_item)
 
     def _build_tooltip(self) -> str:
         """Build rich tooltip body (HTML on KDE)."""

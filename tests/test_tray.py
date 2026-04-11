@@ -23,6 +23,7 @@ def _make_app(tmp_path=None):
     observer.segment_dir = None
     observer.interval = 300
     observer.start_at_mono = time.monotonic()
+    observer._start_mono = time.monotonic()
     observer._sync = None
     observer._dbus_service = None
     bus = MagicMock()
@@ -142,6 +143,24 @@ class TestUpdateLiveStats:
         assert app._cache_item.label == "cache: 42 MB (7 days synced)"
         assert app._captures_item.label == "captures today: 5 segments"
         assert app._uptime_item.label == "uptime: 2h 1m"
+
+    def test_update_live_stats_skips_unchanged_menu_updates(self):
+        app = _make_app()
+        app._build_menu()
+        app.menu.update_item = MagicMock()
+        app.stats = {
+            "captures_today": 5,
+            "total_size_mb": 42,
+            "synced_days": 7,
+            "uptime_seconds": 7260,
+        }
+
+        app._update_live_stats(245, 0)
+        app.menu.update_item.reset_mock()
+
+        app._update_live_stats(245, 0)
+
+        app.menu.update_item.assert_not_called()
 
 
 class TestBuildTooltip:

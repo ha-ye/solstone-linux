@@ -91,6 +91,7 @@ class Observer:
         # State tracking
         self.start_at = time.time()
         self.start_at_mono = time.monotonic()
+        self._start_mono = time.monotonic()
         self.threshold_hits = 0
         self.accumulated_audio_buffer = np.array([], dtype=np.float32).reshape(0, 2)
 

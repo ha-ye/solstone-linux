@@ -127,7 +127,7 @@ class ObserverService(ServiceInterface):
             synced_days = len(self._observer._sync._synced_days)
 
         total_size_mb = int(total_size / (1024 * 1024))
-        uptime_seconds = int(time.monotonic() - self._observer.start_at_mono)
+        uptime_seconds = int(time.monotonic() - self._observer._start_mono)
 
         return {
             "captures_today": Variant("i", captures_today),

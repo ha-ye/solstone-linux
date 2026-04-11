@@ -39,6 +39,7 @@ def _make_observer(captures_dir: Path | None = None):
     observer.interval = 300
     observer.segment_dir = None
     observer.start_at_mono = time.monotonic()
+    observer._start_mono = time.monotonic()
     observer.stream = "test-stream"
     observer._sync = None
     observer._dbus_service = None
