@@ -110,6 +110,22 @@ class SyncService:
             )
             self._save_synced_days()
 
+    def _quarantine_segment(self, segment_dir: Path, reason: str) -> bool:
+        """Rename a segment directory to .failed so it's never retried."""
+        failed_path = segment_dir.with_name(segment_dir.name + ".failed")
+        try:
+            segment_dir.rename(failed_path)
+            logger.warning(
+                "Quarantined %s/%s — %s",
+                segment_dir.parent.parent.name,
+                segment_dir.name,
+                reason,
+            )
+            return True
+        except OSError as e:
+            logger.error("Failed to quarantine %s: %s", segment_dir, e)
+            return False
+
     async def _cleanup_synced_segments(self) -> None:
         """Delete synced segments older than cache_retention_days.
 
@@ -180,8 +196,15 @@ class SyncService:
                         continue
 
                     name = seg_dir.name
-                    # Never touch incomplete or failed
-                    if name.endswith(".incomplete") or name.endswith(".failed"):
+                    # Never touch incomplete segments
+                    if name.endswith(".incomplete"):
+                        continue
+
+                    # Delete quarantined (.failed) segments — no server confirmation needed
+                    if name.endswith(".failed"):
+                        shutil.rmtree(seg_dir)
+                        logger.info("Cleanup: deleted quarantined %s/%s", day, name)
+                        deleted_day += 1
                         continue
 
                     if name not in server_keys:
@@ -367,11 +390,24 @@ class SyncService:
                 if segment_key in server_keys:
                     continue
 
+                # Quarantine segments where all files are zero-byte (corrupt)
+                files = [f for f in segment_dir.iterdir() if f.is_file()]
+                if files and all(f.stat().st_size == 0 for f in files):
+                    self._quarantine_segment(segment_dir, "all files zero-byte")
+                    continue
+
                 any_needed_upload = True
                 self._set_sync_status("uploading", f"uploading {segment_key}")
                 success = await self._upload_segment(day, segment_dir)
 
                 if not success:
+                    if self._last_error_type == ErrorType.CLIENT:
+                        # Non-retryable client error (e.g. 400) — quarantine, don't trip circuit
+                        self._quarantine_segment(
+                            segment_dir, "server rejected (client error)"
+                        )
+                        continue
+
                     self._consecutive_failures += 1
                     threshold = self._circuit_threshold()
                     if self._consecutive_failures >= threshold:

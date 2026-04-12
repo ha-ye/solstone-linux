@@ -386,6 +386,188 @@ class TestRetryCapRespected:
         assert client._max_retries == 1
 
 
+class TestQuarantineZeroByte:
+    """Test that segments with all zero-byte files are quarantined before upload."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_zero_byte_segment(
+        self, captures_dir: Path, day: str, stream: str, name: str
+    ) -> Path:
+        seg_dir = captures_dir / day / stream / name
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "screen.webm").write_bytes(b"")
+        (seg_dir / "audio.flac").write_bytes(b"")
+        return seg_dir
+
+    @pytest.mark.asyncio
+    async def test_zero_byte_segment_quarantined(self, tmp_path: Path):
+        """A segment with all zero-byte files is renamed to .failed before upload."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        seg = self._create_zero_byte_segment(
+            captures, "20260410", "archon", "120000_300"
+        )
+        server_response = []
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            await sync._sync()
+
+        assert not seg.exists()
+        assert seg.with_name("120000_300.failed").exists()
+
+    @pytest.mark.asyncio
+    async def test_zero_byte_does_not_trigger_upload(self, tmp_path: Path):
+        """Zero-byte segments should never call upload_segment."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        self._create_zero_byte_segment(captures, "20260410", "archon", "120000_300")
+        server_response = []
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            with patch.object(
+                sync, "_upload_segment", new_callable=AsyncMock
+            ) as mock_upload:
+                await sync._sync()
+                mock_upload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mixed_files_not_quarantined(self, tmp_path: Path):
+        """A segment with some zero-byte and some non-zero files is NOT quarantined."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        seg_dir = captures / "20260410" / "archon" / "120000_300"
+        seg_dir.mkdir(parents=True)
+        (seg_dir / "screen.webm").write_bytes(b"")
+        (seg_dir / "audio.flac").write_bytes(b"\x00" * 100)
+
+        server_response = []
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            with patch.object(
+                sync, "_upload_segment", new_callable=AsyncMock, return_value=True
+            ) as mock_upload:
+                await sync._sync()
+                mock_upload.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_zero_byte_day_marked_synced(self, tmp_path: Path):
+        """A past day with only zero-byte segments gets marked synced after quarantine."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        self._create_zero_byte_segment(captures, "20260101", "archon", "120000_300")
+        server_response = []
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            await sync._sync()
+
+        assert "20260101" in sync._synced_days
+
+
+class TestQuarantineClientError:
+    """Test that CLIENT errors (HTTP 400) quarantine the segment."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_segment(
+        self, captures_dir: Path, day: str, stream: str, name: str
+    ) -> Path:
+        seg_dir = captures_dir / day / stream / name
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "screen.webm").write_bytes(b"\x00" * 100)
+        return seg_dir
+
+    @pytest.mark.asyncio
+    async def test_client_error_quarantines_segment(self, tmp_path: Path):
+        """HTTP 400 response quarantines the segment to .failed."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        seg = self._create_segment(captures, "20260410", "archon", "120000_300")
+        server_response = []
+
+        async def fake_upload(day, segment_dir):
+            sync._last_error_type = ErrorType.CLIENT
+            return False
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            with patch.object(sync, "_upload_segment", side_effect=fake_upload):
+                await sync._sync()
+
+        assert not seg.exists()
+        assert seg.with_name("120000_300.failed").exists()
+
+    @pytest.mark.asyncio
+    async def test_client_error_does_not_trip_circuit(self, tmp_path: Path):
+        """CLIENT errors should not increment consecutive_failures or open circuit."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        for i in range(10):
+            self._create_segment(captures, "20260410", "archon", f"12000{i}_300")
+
+        server_response = []
+
+        async def fake_upload(day, segment_dir):
+            sync._last_error_type = ErrorType.CLIENT
+            return False
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            with patch.object(sync, "_upload_segment", side_effect=fake_upload):
+                await sync._sync()
+
+        assert sync._consecutive_failures == 0
+        assert not sync._circuit_open
+
+    @pytest.mark.asyncio
+    async def test_transient_error_still_trips_circuit(self, tmp_path: Path):
+        """TRANSIENT errors should still increment failures and trip circuit."""
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+
+        for i in range(6):
+            self._create_segment(captures, "20260410", "archon", f"12000{i}_300")
+
+        server_response = []
+
+        async def fake_upload(day, segment_dir):
+            sync._last_error_type = ErrorType.TRANSIENT
+            return False
+
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            with patch.object(sync, "_upload_segment", side_effect=fake_upload):
+                await sync._sync()
+
+        assert sync._circuit_open
+        assert sync._consecutive_failures >= 5
+
+
 class TestCleanupSyncedSegments:
     """Test cache retention cleanup of synced segments."""
 
@@ -467,13 +649,12 @@ class TestCleanupSyncedSegments:
         assert (captures / "20260101" / "archon" / "120000_300").exists()
 
     @pytest.mark.asyncio
-    async def test_never_touches_incomplete_or_failed(self, tmp_path: Path):
-        """.incomplete and .failed segments are never deleted."""
+    async def test_never_touches_incomplete(self, tmp_path: Path):
+        """.incomplete segments are never deleted."""
         sync = self._make_sync(tmp_path, retention=7)
         captures = sync._config.captures_dir
 
         self._create_segment(captures, "20260101", "archon", "120000.incomplete")
-        self._create_segment(captures, "20260101", "archon", "130000.failed")
         self._create_segment(captures, "20260101", "archon", "140000_300")
         sync._synced_days.add("20260101")
 
@@ -484,7 +665,6 @@ class TestCleanupSyncedSegments:
             await sync._cleanup_synced_segments()
 
         assert (captures / "20260101" / "archon" / "120000.incomplete").exists()
-        assert (captures / "20260101" / "archon" / "130000.failed").exists()
         assert not (captures / "20260101" / "archon" / "140000_300").exists()
 
     @pytest.mark.asyncio
@@ -576,3 +756,70 @@ class TestCleanupSyncedSegments:
             await sync._cleanup_synced_segments()
 
         assert not (captures / "20260101" / "archon" / "120000_300").exists()
+
+
+class TestCleanupFailedSegments:
+    """Test that .failed segments are cleaned up on retention schedule."""
+
+    def _make_sync(self, tmp_path: Path, retention: int = 7) -> SyncService:
+        config = Config(base_dir=tmp_path)
+        config.cache_retention_days = retention
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_segment(
+        self, captures_dir: Path, day: str, stream: str, name: str
+    ) -> Path:
+        seg_dir = captures_dir / day / stream / name
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "screen.webm").write_bytes(b"\x00" * 100)
+        return seg_dir
+
+    @pytest.mark.asyncio
+    async def test_failed_segments_deleted_on_retention(self, tmp_path: Path):
+        """.failed segments are deleted when day meets retention age."""
+        sync = self._make_sync(tmp_path, retention=7)
+        captures = sync._config.captures_dir
+
+        self._create_segment(captures, "20260101", "archon", "120000_300.failed")
+        sync._synced_days.add("20260101")
+
+        server_response = []
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            await sync._cleanup_synced_segments()
+
+        assert not (captures / "20260101" / "archon" / "120000_300.failed").exists()
+
+    @pytest.mark.asyncio
+    async def test_failed_segments_kept_if_day_not_synced(self, tmp_path: Path):
+        """.failed segments are kept if the day is not in synced_days."""
+        sync = self._make_sync(tmp_path, retention=7)
+        captures = sync._config.captures_dir
+
+        self._create_segment(captures, "20260101", "archon", "120000_300.failed")
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+            await sync._cleanup_synced_segments()
+
+        assert (captures / "20260101" / "archon" / "120000_300.failed").exists()
+        mock_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_incomplete_still_skipped(self, tmp_path: Path):
+        """.incomplete segments are still never deleted."""
+        sync = self._make_sync(tmp_path, retention=7)
+        captures = sync._config.captures_dir
+
+        self._create_segment(captures, "20260101", "archon", "120000.incomplete")
+        sync._synced_days.add("20260101")
+
+        server_response = []
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+        ):
+            await sync._cleanup_synced_segments()
+
+        assert (captures / "20260101" / "archon" / "120000.incomplete").exists()
