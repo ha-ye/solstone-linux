@@ -263,6 +263,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         print(f"Cache:  {captures_dir} (not created yet)")
 
+    # Retention policy
+    retention = config.cache_retention_days
+    if retention < 0:
+        print("Retain: forever")
+    elif retention == 0:
+        print("Retain: delete after sync")
+    else:
+        print(f"Retain: {retention} day(s)")
+
     # Synced days
     synced_path = config.state_dir / "synced_days.json"
     if synced_path.exists():

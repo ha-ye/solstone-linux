@@ -67,3 +67,20 @@ class TestConfig:
         loaded = load_config(tmp_path)
         assert loaded.sync_retry_delays == [10, 60, 300]
         assert loaded.sync_max_retries == 5
+
+    def test_cache_retention_days_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.cache_retention_days = 14
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.cache_retention_days == 14
+
+    def test_cache_retention_days_default(self, tmp_path: Path):
+        """Existing configs without cache_retention_days default to 7."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"server_url": "http://test"}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.cache_retention_days == 7
