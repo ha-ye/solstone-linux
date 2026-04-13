@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -146,6 +147,11 @@ def cmd_install_service(args: argparse.Namespace) -> int:
         )
         return 1
 
+    venv_bin = str(Path(binary).resolve().parent)
+    raw_path = os.environ.get("PATH") or "/usr/local/bin:/usr/bin:/bin"
+    path_entries = [venv_bin] + raw_path.split(":")
+    service_path = ":".join(dict.fromkeys(path_entries))
+
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
     unit_path = unit_dir / "solstone-linux.service"
@@ -160,6 +166,7 @@ BindsTo=graphical-session.target
 Type=simple
 ExecStart={binary} run
 PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
+Environment=PATH={service_path}
 Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=300
