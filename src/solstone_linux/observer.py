@@ -439,6 +439,16 @@ class Observer:
             stream=self.stream,
         )
 
+    def _refresh_tray(self):
+        """Refresh the SNI tray UI. Safe when tray is unavailable; disables on failure."""
+        if self._tray is None:
+            return
+        try:
+            self._tray.update()
+        except Exception:
+            logger.warning("Tray update failed, disabling tray", exc_info=True)
+            self._tray = None
+
     def pause(self, duration_seconds: int):
         """Pause capture. duration_seconds=0 means indefinite."""
         self._paused = True
@@ -449,6 +459,7 @@ class Observer:
         if self._dbus_service:
             self._dbus_service.StatusChanged("paused")
         logger.info("Paused for %ss", duration_seconds)
+        self._refresh_tray()
 
     def resume(self):
         """Resume capture from pause."""
@@ -459,6 +470,7 @@ class Observer:
                 "recording" if self.current_mode == MODE_SCREENCAST else "idle"
             )
         logger.info("Resumed")
+        self._refresh_tray()
 
     async def main_loop(self):
         """Run the main observer loop with background sync."""
@@ -519,14 +531,7 @@ class Observer:
                             else "idle"
                         )
                     logger.info("Auto-resumed from timed pause")
-                    if self._tray:
-                        try:
-                            self._tray.update()
-                        except Exception:
-                            logger.warning(
-                                "Tray update failed, disabling tray", exc_info=True
-                            )
-                            self._tray = None
+                    self._refresh_tray()
 
                 # Handle paused state
                 if self._paused:
@@ -548,6 +553,7 @@ class Observer:
                             self._sync.trigger()
                     self.audio_recorder.get_buffers()
                     self.emit_status()
+                    self._refresh_tray()
                     continue
 
                 # Resume: start new segment if needed (segment_dir is None after pause)
@@ -642,25 +648,11 @@ class Observer:
                     if mode_changed and self._dbus_service:
                         status = "recording" if new_mode == MODE_SCREENCAST else "idle"
                         self._dbus_service.StatusChanged(status)
-                        if self._tray:
-                            try:
-                                self._tray.update()
-                            except Exception:
-                                logger.warning(
-                                    "Tray update failed, disabling tray", exc_info=True
-                                )
-                                self._tray = None
+                        self._refresh_tray()
 
                 # Emit status event
                 self.emit_status()
-                if self._tray:
-                    try:
-                        self._tray.update()
-                    except Exception:
-                        logger.warning(
-                            "Tray update failed, disabling tray", exc_info=True
-                        )
-                        self._tray = None
+                self._refresh_tray()
         finally:
             # Cleanup on exit
             logger.info("Observer loop stopped, cleaning up...")

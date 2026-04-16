@@ -56,3 +56,25 @@ class TestPauseResumeState:
 
         assert hasattr(observer, "_paused")
         assert hasattr(observer, "_pause_until")
+
+    def test_pause_refreshes_tray(self, tmp_path: Path):
+        from unittest.mock import MagicMock
+
+        config = Config(base_dir=tmp_path)
+        observer = Observer(config)
+        observer._tray = MagicMock()
+
+        observer.pause(900)
+
+        assert observer._tray.update.called is True
+
+    def test_resume_refreshes_tray(self, tmp_path: Path):
+        from unittest.mock import MagicMock
+
+        config = Config(base_dir=tmp_path)
+        observer = Observer(config)
+        observer._tray = MagicMock()
+
+        observer.resume()
+
+        assert observer._tray.update.called is True
