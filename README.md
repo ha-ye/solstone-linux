@@ -23,15 +23,16 @@ pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib
 
 ## Install
 
-Packages are not yet on PyPI. Install from source:
+For a first-time install on this machine:
 
 ```bash
 git clone https://github.com/solpbc/solstone-linux.git
 cd solstone-linux
-pipx install --system-site-packages .
+make deploy
+solstone-linux setup
 ```
 
-`--system-site-packages` is required for PyGObject/GStreamer access.
+See `INSTALL.md` for distro packages, tray notes, and troubleshooting details.
 
 ## Setup
 
@@ -44,9 +45,6 @@ solstone-linux setup
 ```bash
 # Foreground
 solstone-linux run
-
-# As a systemd user service
-solstone-linux install-service
 ```
 
 ## Status

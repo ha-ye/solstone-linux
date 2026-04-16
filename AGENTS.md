@@ -14,6 +14,7 @@ This is **not** part of the solstone monorepo. It is a standalone package with i
 src/solstone_linux/
     __init__.py             Package version
     cli.py                  CLI entry point (run, setup, install-service, status)
+    solstone-linux.service.in        Systemd unit template (rendered by install-service)
     config.py               Config loading/persistence (~/.local/share/solstone-linux/)
     observer.py             Main capture loop — state machine (idle/screencast), audio + video
     screencast.py           Portal-based multi-monitor recording (xdg-desktop-portal + GStreamer)
@@ -29,7 +30,7 @@ src/solstone_linux/
     recovery.py             Crash recovery for orphaned .incomplete segments
 
 tests/                      pytest test suite
-contrib/                    Reference systemd service unit
+contrib/                    Reference icons for development fallback
 ```
 
 ## Architecture
@@ -52,6 +53,12 @@ make test           # Run all tests
 make test-only TEST=tests/test_config.py  # Run specific test
 make format         # Auto-format with ruff
 make ci             # Lint + format check + tests
+make deploy         # pipx install + install-service (first-time deploy on this machine)
+make upgrade        # Run CI, then pipx reinstall + restart service
+make service-restart  # systemctl restart wrapper
+make service-status   # systemctl status wrapper
+make service-logs     # systemctl log tail wrapper
+make uninstall-service  # Disable + remove unit + pipx uninstall
 make clean          # Remove build artifacts and caches
 make versions       # Show installed package versions
 ```

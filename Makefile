@@ -1,7 +1,7 @@
 # solstone-linux Makefile
 # Standalone Linux desktop observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install versions all
+.PHONY: install test test-only format ci clean clean-install versions all deploy upgrade service-restart service-status service-logs uninstall-service
 
 # Default target
 all: install
@@ -17,6 +17,10 @@ ifndef UV
 $(error uv is not installed. Install it: curl -LsSf https://astral.sh/uv/install.sh | sh)
 endif
 
+APP := solstone-linux
+UNIT := solstone-linux.service
+PIPX_FLAGS := --system-site-packages
+
 # Marker file to track installation
 .installed: pyproject.toml
 	@echo "Installing package with uv (including dev tools)..."
@@ -25,6 +29,34 @@ endif
 
 # Install package in editable mode with isolated venv
 install: .installed
+
+deploy:
+	@command -v pipx >/dev/null || { echo "pipx not found — install with: sudo dnf install pipx (or apt/brew equivalent)"; exit 1; }
+	# Editable installs (pipx install -e .) are deliberately avoided: pipx treats editable installs differently and system-site-packages behavior is unreliable with them.
+	pipx install --force $(PIPX_FLAGS) .
+	$(APP) install-service
+	systemctl --user --no-pager status $(UNIT) | head
+
+upgrade: ci
+	pipx install --force $(PIPX_FLAGS) .
+	systemctl --user daemon-reload
+	systemctl --user restart $(UNIT)
+	systemctl --user --no-pager status $(UNIT) | head
+
+service-restart:
+	systemctl --user restart $(UNIT)
+
+service-status:
+	systemctl --user --no-pager status $(UNIT)
+
+service-logs:
+	journalctl --user -u $(UNIT) -n 100 --no-pager -f
+
+uninstall-service:
+	-systemctl --user disable --now $(UNIT)
+	-rm -f $$HOME/.config/systemd/user/$(UNIT)
+	-systemctl --user daemon-reload
+	-pipx uninstall $(APP)
 
 # Venv tool shortcuts
 PYTEST := $(VENV_BIN)/pytest

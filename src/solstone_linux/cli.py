@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.resources
 import json
 import logging
 import os
@@ -153,48 +154,47 @@ def cmd_install_service(args: argparse.Namespace) -> int:
     service_path = ":".join(dict.fromkeys(path_entries))
 
     unit_dir = Path.home() / ".config" / "systemd" / "user"
-    unit_dir.mkdir(parents=True, exist_ok=True)
     unit_path = unit_dir / "solstone-linux.service"
+    template = (
+        importlib.resources.files("solstone_linux")
+        .joinpath("solstone-linux.service.in")
+        .read_text()
+    )
+    unit = template.replace("{BINARY}", binary).replace("{PATH}", service_path)
+    existing = unit_path.read_text() if unit_path.exists() else None
 
-    unit_content = f"""\
-[Unit]
-Description=Solstone Linux Desktop Observer
-After=graphical-session.target
-BindsTo=graphical-session.target
+    if existing == unit and not args.force:
+        print("Unit unchanged; nothing to do")
+    else:
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        unit_path.write_text(unit)
+        print(f"Wrote {unit_path}")
 
-[Service]
-Type=simple
-ExecStart={binary} run
-PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
-Environment=PATH={service_path}
-Restart=on-failure
-RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-[Install]
-WantedBy=graphical-session.target
-"""
-
-    unit_path.write_text(unit_content)
-    print(f"Wrote {unit_path}")
-
-    # Reload, enable, start
-    try:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(
-            ["systemctl", "--user", "enable", "--now", "solstone-linux.service"],
-            check=True,
-        )
-        print("Service enabled and started.")
-        subprocess.run(
-            ["systemctl", "--user", "status", "solstone-linux.service"],
-            check=False,
-        )
-    except FileNotFoundError:
-        print("Warning: systemctl not found. Enable the service manually.")
-    except subprocess.CalledProcessError as e:
-        print(f"Warning: systemctl command failed: {e}")
+        # Reload, enable, restart, and show status
+        try:
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+            subprocess.run(
+                ["systemctl", "--user", "enable", "--now", "solstone-linux.service"],
+                check=True,
+            )
+            subprocess.run(
+                ["systemctl", "--user", "restart", "solstone-linux.service"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "--no-pager",
+                    "status",
+                    "solstone-linux.service",
+                ],
+                check=False,
+            )
+        except FileNotFoundError:
+            print("Warning: systemctl not found. Enable the service manually.")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: systemctl command failed: {e}")
 
     icon_source = Path(__file__).resolve().parent / "icons" / "hicolor"
     if icon_source.is_dir():
@@ -328,7 +328,14 @@ def main() -> None:
     subparsers.add_parser("setup", help="Interactive configuration")
 
     # install-service
-    subparsers.add_parser("install-service", help="Install systemd user service")
+    install_svc = subparsers.add_parser(
+        "install-service", help="Install systemd user service"
+    )
+    install_svc.add_argument(
+        "--force",
+        action="store_true",
+        help="Always rewrite the unit file and restart the service, even if unchanged",
+    )
 
     # status
     subparsers.add_parser("status", help="Show capture and sync state")
