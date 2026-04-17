@@ -53,8 +53,7 @@ make test           # Run all tests
 make test-only TEST=tests/test_config.py  # Run specific test
 make format         # Auto-format with ruff
 make ci             # Lint + format check + tests
-make deploy         # pipx install + install-service (first-time deploy on this machine)
-make upgrade        # Run CI, then pipx reinstall + restart service
+make install-service  # Smart install-or-upgrade: guards against cross-repo contamination; runs CI in upgrade mode
 make service-restart  # systemctl restart wrapper
 make service-status   # systemctl status wrapper
 make service-logs     # systemctl log tail wrapper
@@ -105,6 +104,7 @@ Python packages (in pyproject.toml):
 - Captures: `~/.local/share/solstone-linux/captures/`
 - State: `~/.local/share/solstone-linux/state/`
 - Restore token: `~/.local/share/solstone-linux/config/restore_token`
+- Install source marker: `~/.config/solstone-linux/.install-source` (tracks which repo clone owns the pipx install)
 
 ## Key Patterns
 

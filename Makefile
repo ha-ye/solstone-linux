@@ -1,7 +1,7 @@
 # solstone-linux Makefile
 # Standalone Linux desktop observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install versions all deploy upgrade service-restart service-status service-logs uninstall-service
+.PHONY: install test test-only format ci clean clean-install versions all install-service service-restart service-status service-logs uninstall-service
 
 # Default target
 all: install
@@ -30,18 +30,17 @@ PIPX_FLAGS := --system-site-packages
 # Install package in editable mode with isolated venv
 install: .installed
 
-deploy:
+install-service: .installed
 	@command -v pipx >/dev/null || { echo "pipx not found — install with: sudo dnf install pipx (or apt/brew equivalent)"; exit 1; }
+	@$(PYTHON) -m solstone_linux.install_guard preinstall "$(CURDIR)"; rc=$$?; \
+	 if [ $$rc -eq 2 ]; then exit 1; \
+	 elif [ $$rc -eq 10 ]; then $(MAKE) ci; \
+	 fi
 	# Editable installs (pipx install -e .) are deliberately avoided: pipx treats editable installs differently and system-site-packages behavior is unreliable with them.
 	pipx install --force $(PIPX_FLAGS) .
+	$(PYTHON) -m solstone_linux.install_guard write "$(CURDIR)"
 	$(APP) install-service
-	systemctl --user --no-pager status $(UNIT) | head
-
-upgrade: ci
-	pipx install --force $(PIPX_FLAGS) .
-	systemctl --user daemon-reload
-	systemctl --user restart $(UNIT)
-	systemctl --user --no-pager status $(UNIT) | head
+	systemctl --user status $(UNIT) --no-pager -l | head -n 20 || true
 
 service-restart:
 	systemctl --user restart $(UNIT)
@@ -52,11 +51,17 @@ service-status:
 service-logs:
 	journalctl --user -u $(UNIT) -n 100 --no-pager -f
 
-uninstall-service:
-	-systemctl --user disable --now $(UNIT)
-	-rm -f $$HOME/.config/systemd/user/$(UNIT)
+uninstall-service: .installed
+	@$(PYTHON) -m solstone_linux.install_guard preuninstall "$(CURDIR)"; rc=$$?; \
+	 if [ $$rc -eq 2 ]; then exit 1; \
+	 elif [ $$rc -eq 0 ]; then exit 0; \
+	 fi
+	-systemctl --user stop $(UNIT)
+	-systemctl --user disable $(UNIT)
+	-rm -f $(HOME)/.config/systemd/user/$(UNIT)
 	-systemctl --user daemon-reload
 	-pipx uninstall $(APP)
+	$(PYTHON) -m solstone_linux.install_guard remove
 
 # Venv tool shortcuts
 PYTEST := $(VENV_BIN)/pytest

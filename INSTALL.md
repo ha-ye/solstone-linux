@@ -41,14 +41,14 @@ if it's already active and connected, you're done.
    sudo pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib xdg-desktop-portal pipx
    ```
 
-2. if not already cloned, clone into solstone's observers directory and deploy:
+2. if not already cloned, clone into solstone's observers directory and install:
    ```
    cd "$(sol root)/observers"
    git clone https://github.com/solpbc/solstone-linux.git
    cd solstone-linux
-   make deploy
+   make install-service
    ```
-   `make deploy` installs with pipx using `--system-site-packages`, then installs and starts the user service.
+   `make install-service` is a smart install-or-upgrade: detects fresh-install vs upgrade via a marker file, runs CI in upgrade mode, guards against cross-repo contamination.
 
 3. run the interactive setup:
    ```
@@ -64,7 +64,7 @@ if it's already active and connected, you're done.
 ## updating after a code change
 
 ```
-git pull && make upgrade
+git pull && make install-service
 ```
 
 ## notes

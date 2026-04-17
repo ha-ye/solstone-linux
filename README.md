@@ -28,7 +28,7 @@ For a first-time install on this machine:
 ```bash
 git clone https://github.com/solpbc/solstone-linux.git
 cd solstone-linux
-make deploy
+make install-service
 solstone-linux setup
 ```
 

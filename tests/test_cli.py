@@ -10,8 +10,8 @@ from solstone_linux import cli as cli_module
 from solstone_linux.cli import cmd_install_service
 
 
-def _args(force: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(force=force)
+def _args() -> argparse.Namespace:
+    return argparse.Namespace()
 
 
 _REAL_IS_DIR = Path.is_dir
@@ -98,24 +98,7 @@ def test_cmd_install_service_uses_default_path_when_empty(tmp_path: Path):
     )
 
 
-def test_cmd_install_service_unchanged_is_noop(tmp_path: Path, capsys):
-    binary = "/home/user/.local/pipx/venvs/solstone-linux/bin/solstone-linux"
-
-    with patch.dict(os.environ, {"PATH": "/usr/local/bin:/usr/bin:/bin"}, clear=True):
-        with patch("solstone_linux.cli.shutil.which", return_value=binary):
-            with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
-                with patch("solstone_linux.cli.subprocess.run") as run_mock:
-                    with patch("solstone_linux.cli.Path.is_dir", return_value=False):
-                        assert cmd_install_service(_args()) == 0
-                        first_call_count = run_mock.call_count
-                        assert cmd_install_service(_args()) == 0
-
-    captured = capsys.readouterr()
-    assert "Unit unchanged; nothing to do" in captured.out
-    assert run_mock.call_count == first_call_count
-
-
-def test_cmd_install_service_force_always_writes(tmp_path: Path):
+def test_cmd_install_service_always_rewrites(tmp_path: Path, capsys):
     binary = "/home/user/.local/pipx/venvs/solstone-linux/bin/solstone-linux"
 
     with patch.dict(os.environ, {"PATH": "/usr/local/bin:/usr/bin:/bin"}, clear=True):
@@ -128,7 +111,8 @@ def test_cmd_install_service_force_always_writes(tmp_path: Path):
                         side_effect=_is_dir_without_icons,
                     ):
                         assert cmd_install_service(_args()) == 0
-                        first_call_count = run_mock.call_count
-                        assert cmd_install_service(_args(force=True)) == 0
+                        assert cmd_install_service(_args()) == 0
 
-    assert run_mock.call_count == first_call_count + 4
+    captured = capsys.readouterr()
+    assert "nothing to do" not in captured.out.lower()
+    assert run_mock.call_count == 8
