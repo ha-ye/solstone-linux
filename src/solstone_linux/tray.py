@@ -44,6 +44,29 @@ Service: systemctl --user status solstone-linux"""
 SOURCE_DIR = str(Path(__file__).resolve().parent)
 
 
+def _compute_header_label(status, sync_status, pause_remaining) -> str:
+    if status == "paused":
+        if pause_remaining and pause_remaining > 0:
+            mins = pause_remaining // 60
+            return f"paused ({mins}m remaining)"
+        return "paused"
+    if status == "stopped":
+        return "not running"
+    if status == "recording":
+        if sync_status == "offline":
+            return "observing — offline (recording locally)"
+        if sync_status in ("syncing", "uploading", "retrying"):
+            return "observing — syncing"
+        return "observing — connected"
+    if status == "idle":
+        if sync_status == "offline":
+            return "idle — offline"
+        if sync_status in ("syncing", "uploading", "retrying"):
+            return "idle — syncing"
+        return "idle — connected"
+    return str(status)
+
+
 class TrayApp:
     """In-process tray component — exports SNI on the observer's bus."""
 
@@ -64,6 +87,7 @@ class TrayApp:
         self._last_stats_time = 0.0
 
         # Menu item references for dynamic updates
+        self._status_header: MenuItem = None
         self._status_item: MenuItem = None
         self._sync_item: MenuItem = None
         self._segment_item: MenuItem = None
@@ -201,11 +225,14 @@ class TrayApp:
 
         self._update_status(status)
         self._update_sync(sync_status, sync_progress)
+        self._update_header(pause_remaining)
         self._update_live_stats(segment_timer, pause_remaining)
         self.paused_remaining = pause_remaining
 
     def _build_menu(self):
         """Build the full tray menu structure."""
+
+        self._status_header = MenuItem(label="observing", enabled=False)
 
         # ── Status submenu (live data) ──
         self._status_item = MenuItem(label="observing", enabled=False)
@@ -316,11 +343,12 @@ class TrayApp:
         # ── Assemble full menu ──
         self.menu.set_menu(
             [
-                status_submenu,
+                self._status_header,
                 separator(),
                 self._pause_submenu,
                 self._resume_item,
                 separator(),
+                status_submenu,
                 open_journal,
                 settings_submenu,
                 about_submenu,
@@ -347,15 +375,6 @@ class TrayApp:
         # Update tooltip
         self.sni.set_tooltip("solstone observer", self._build_tooltip())
 
-        # Update status submenu item
-        labels = {
-            "recording": "observing",
-            "paused": "paused",
-            "idle": "idle (screen inactive)",
-            "stopped": "not running",
-        }
-        self._status_item.label = labels.get(status, status)
-
         # Toggle pause/resume
         is_paused = status == "paused"
         self._pause_submenu.visible = not is_paused
@@ -375,6 +394,14 @@ class TrayApp:
             self.sni.set_status("Active")
 
         log.info(f"Status -> {status} (icon: {icon})")
+
+    def _update_header(self, pause_remaining: int):
+        label = _compute_header_label(self.status, self.sync_status, pause_remaining)
+        if label == self._status_header.label:
+            return
+        self._status_header.label = label
+        self._status_item.label = label
+        self.menu.update_item(self._status_header)
 
     def _update_sync(self, sync_status: str, progress: str):
         """Update sync status display."""

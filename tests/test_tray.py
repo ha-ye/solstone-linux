@@ -4,10 +4,19 @@
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
 
 from solstone_linux.config import Config
 from solstone_linux.dbusmenu import MenuItem, separator
-from solstone_linux.tray import AGENT_INSTRUCTIONS, ICONS, SOURCE_DIR, TrayApp
+from solstone_linux.tray import (
+    AGENT_INSTRUCTIONS,
+    ICONS,
+    SOURCE_DIR,
+    TrayApp,
+    _compute_header_label,
+)
 
 
 def _make_app(tmp_path=None):
@@ -54,8 +63,9 @@ class TestBuildMenu:
         assert app._pause_submenu.children_display == "submenu"
         assert len(app._pause_submenu.children) == 4
         assert app._resume_item.visible is False
+        assert app.menu._root.children[0] is app._status_header
         assert app.menu._root.children[1].item_type == separator().item_type
-        assert len(app.menu._root.children) == 10
+        assert len(app.menu._root.children) == 11
 
 
 class TestUpdateStatus:
@@ -69,7 +79,6 @@ class TestUpdateStatus:
         assert app.status == "paused"
         assert app._pause_submenu.visible is False
         assert app._resume_item.visible is True
-        assert app._status_item.label == "paused"
         assert app.menu.update_item.call_count == 2
 
     def test_update_status_idle(self):
@@ -78,7 +87,7 @@ class TestUpdateStatus:
 
         app._update_status("idle")
 
-        assert app._status_item.label == "idle (screen inactive)"
+        assert app.status == "idle"
 
     def test_update_status_stopped_sets_attention(self):
         app = _make_app()
@@ -86,7 +95,7 @@ class TestUpdateStatus:
 
         app._update_status("stopped")
 
-        assert app._status_item.label == "not running"
+        assert app.status == "stopped"
         assert app.sni._status == "NeedsAttention"
 
     def test_update_status_recording_uses_error_icon_when_error_set(self):
@@ -161,6 +170,66 @@ class TestUpdateLiveStats:
         app._update_live_stats(245, 0)
 
         app.menu.update_item.assert_not_called()
+
+
+class TestHeaderLabel:
+    def test_header_recording_synced(self):
+        app = _make_app()
+        app._build_menu()
+
+        app.update()
+
+        assert app._status_header.label == "observing — connected"
+        assert app._status_item.label == "observing — connected"
+
+    def test_header_paused_with_timer(self):
+        app = _make_app()
+        app._build_menu()
+        app._observer._paused = True
+        app._observer._pause_until = 1000.0
+
+        with patch("solstone_linux.tray.time.monotonic", return_value=100.0):
+            app.update()
+
+        assert app._status_header.label == "paused (15m remaining)"
+        assert app._status_item.label == "paused (15m remaining)"
+
+    def test_header_recording_offline(self):
+        app = _make_app()
+        app._build_menu()
+        app._observer._sync = MagicMock()
+        app._observer._sync.sync_status = "offline"
+        app._observer._sync.sync_progress = ""
+
+        app.update()
+
+        assert app._status_header.label == "observing — offline (recording locally)"
+        assert app._status_item.label == "observing — offline (recording locally)"
+
+
+class TestComputeHeaderLabel:
+    @pytest.mark.parametrize(
+        "status,sync_status,pause_remaining,expected",
+        [
+            ("recording", "synced", 0, "observing — connected"),
+            ("recording", "syncing", 0, "observing — syncing"),
+            ("recording", "uploading", 0, "observing — syncing"),
+            ("recording", "retrying", 0, "observing — syncing"),
+            ("recording", "offline", 0, "observing — offline (recording locally)"),
+            ("idle", "synced", 0, "idle — connected"),
+            ("idle", "syncing", 0, "idle — syncing"),
+            ("idle", "uploading", 0, "idle — syncing"),
+            ("idle", "retrying", 0, "idle — syncing"),
+            ("idle", "offline", 0, "idle — offline"),
+            ("paused", "synced", 0, "paused"),
+            ("paused", "synced", 900, "paused (15m remaining)"),
+            ("paused", "offline", 59, "paused (0m remaining)"),
+            ("stopped", "synced", 0, "not running"),
+            ("weird", "synced", 0, "weird"),
+        ],
+    )
+    def test_compute_header_label(self, status, sync_status, pause_remaining, expected):
+        assert _compute_header_label(status, sync_status, pause_remaining) == expected
 
 
 class TestBuildTooltip:

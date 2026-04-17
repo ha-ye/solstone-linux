@@ -62,10 +62,9 @@ class MenuItem:
             props["label"] = Variant("s", self.label)
         if self.icon_name:
             props["icon-name"] = Variant("s", self.icon_name)
-        if not self.enabled:
-            props["enabled"] = Variant("b", False)
-        if not self.visible:
-            props["visible"] = Variant("b", False)
+        # Some hosts cache booleans and won't default missing keys back to True.
+        props["enabled"] = Variant("b", self.enabled)
+        props["visible"] = Variant("b", self.visible)
         if self.toggle_type:
             props["toggle-type"] = Variant("s", self.toggle_type)
             props["toggle-state"] = Variant("i", self.toggle_state)
