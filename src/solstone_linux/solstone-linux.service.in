@@ -2,6 +2,8 @@
 Description=Solstone Linux Desktop Observer
 After=graphical-session.target
 BindsTo=graphical-session.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,8 +12,6 @@ PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
 Environment=PATH={PATH}
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Install]
 WantedBy=graphical-session.target
