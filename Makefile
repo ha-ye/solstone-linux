@@ -1,7 +1,7 @@
 # solstone-linux Makefile
 # Standalone Linux desktop observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install versions all install-service service-restart service-status service-logs uninstall-service
+.PHONY: install test test-only format ci clean clean-install versions all bootstrap install-service service-restart service-status service-logs uninstall-service
 
 # Default target
 all: install
@@ -13,8 +13,10 @@ PYTHON := $(VENV_BIN)/python
 
 # Require uv
 UV := $(shell command -v uv 2>/dev/null)
+ifneq ($(filter bootstrap,$(MAKECMDGOALS)),bootstrap)
 ifndef UV
-$(error uv is not installed. Install it: curl -LsSf https://astral.sh/uv/install.sh | sh)
+$(error uv is not installed. Run: make bootstrap)
+endif
 endif
 
 APP := solstone-linux
@@ -32,7 +34,32 @@ VENV_FLAGS := --system-site-packages
 # Install package in editable mode with isolated venv
 install: .installed
 
+bootstrap:
+	@if command -v uv >/dev/null 2>&1; then \
+		echo "uv already installed"; \
+	else \
+		echo "installing uv..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+	fi
+	@if ! command -v pipx >/dev/null 2>&1; then \
+		echo "pipx missing — install instructions:"; \
+		echo "  fedora:   sudo dnf install pipx"; \
+		echo "  debian:   sudo apt install pipx"; \
+		echo "  arch:     sudo pacman -S python-pipx"; \
+		echo "  opensuse: sudo zypper install python3-pipx"; \
+		exit 1; \
+	fi
+	@python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' || { \
+		echo "python >=3.10 required"; exit 1; \
+	}
+	@if [ -f .installed ]; then \
+		$(VENV_BIN)/solstone-linux doctor; \
+	else \
+		echo "now run: make install-service"; \
+	fi
+
 install-service: .installed
+	@$(VENV_BIN)/solstone-linux doctor
 	@command -v pipx >/dev/null || { echo "pipx not found — install with: sudo dnf install pipx (or apt/brew equivalent)"; exit 1; }
 	@$(PYTHON) -m solstone_linux.install_guard preinstall "$(CURDIR)"; rc=$$?; \
 	 if [ $$rc -eq 2 ]; then exit 1; \

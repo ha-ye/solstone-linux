@@ -121,3 +121,31 @@ gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
 then restart GNOME Shell — on Wayland, log out and back in; on X11, press Alt+F2 and type `r`. v64 supports GNOME Shell 45–50; check https://extensions.gnome.org/extension/615/appindicator-support/ for a newer build if you're on a later shell.
 
 to check if it's working: `gnome-extensions list | grep appindicator` should show it. if the tray icon still doesn't appear, verify it's enabled: `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com`
+
+## Troubleshooting
+
+Common install-time errors and their fixes:
+
+- **`pkg-config: command not found` or `cairo` pkg-config failure**
+  - fedora: `sudo dnf install pkgconf-pkg-config cairo-devel`
+  - debian/ubuntu: `sudo apt install pkg-config libcairo2-dev`
+  - arch: `sudo pacman -S pkgconf cairo`
+  - opensuse: `sudo zypper install pkgconf-pkg-config cairo-devel`
+
+- **`girepository-2.0` missing or `pygobject` build failure**
+  - fedora: `sudo dnf install gobject-introspection-devel`
+  - debian/ubuntu: `sudo apt install libgirepository1.0-dev`
+  - arch: `sudo pacman -S gobject-introspection`
+  - opensuse: `sudo zypper install gobject-introspection-devel`
+
+- **`Python.h: No such file or directory`**
+  - fedora: `sudo dnf install python3-devel`
+  - debian/ubuntu: `sudo apt install python3-dev`
+  - arch: already bundled in `python` package
+  - opensuse: `sudo zypper install python3-devel`
+
+- **`pipx: command not found`**
+  - fedora: `sudo dnf install pipx`
+  - debian/ubuntu: `sudo apt install pipx`
+  - arch: `sudo pacman -S python-pipx`
+  - opensuse: `sudo zypper install python3-pipx`
