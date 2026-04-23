@@ -20,11 +20,13 @@ endif
 APP := solstone-linux
 UNIT := solstone-linux.service
 PIPX_FLAGS := --system-site-packages
+VENV_FLAGS := --system-site-packages
 
 # Marker file to track installation
 .installed: pyproject.toml
 	@echo "Installing package with uv (including dev tools)..."
-	$(UV) sync --group dev
+	@[ -f $(VENV)/pyvenv.cfg ] || $(UV) venv $(VENV_FLAGS) --python /usr/bin/python3 $(VENV)
+	$(UV) sync --group dev --no-install-package pygobject --no-install-package pycairo
 	@touch .installed
 
 # Install package in editable mode with isolated venv
@@ -116,6 +118,7 @@ clean:
 	find . -type f -name "*.pyc" -delete
 	find . -type f -name "*.pyo" -delete
 	rm -f .installed
+	rm -rf $(VENV)
 
 # Clean everything and reinstall
 clean-install: clean install
