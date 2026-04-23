@@ -49,8 +49,71 @@ def _make_name_has_owner_bus(
 class TestIsScreenLocked:
     """Test screen lock fallback order."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_xdg_desktop(self, monkeypatch):
+        monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
+
     @pytest.mark.asyncio
     async def test_fdo_backend_returns_true_without_gnome_fallback(self):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_active = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.is_screen_locked(bus)
+
+        assert result is True
+        assert bus.introspect.await_count == 1
+        bus.introspect.assert_awaited_once_with(
+            activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
+        )
+
+    @pytest.mark.asyncio
+    async def test_xdg_current_desktop_ubuntu_gnome_skips_fdo_and_returns_gnome_state(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_active = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        with caplog.at_level(logging.WARNING):
+            result = await activity.is_screen_locked(bus)
+
+        assert result is True
+        assert bus.introspect.await_args_list == [
+            call(activity.GNOME_SCREENSAVER_BUS, activity.GNOME_SCREENSAVER_PATH)
+        ]
+        assert not any(
+            "is_screen_locked FDO backend failed" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_xdg_current_desktop_kde_still_probes_fdo_first(self, monkeypatch):
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+        bus = MagicMock()
+        bus.introspect = AsyncMock(return_value=object())
+        iface = MagicMock()
+        iface.call_get_active = AsyncMock(return_value=True)
+        bus.get_proxy_object.return_value = _make_proxy_with_interface(iface)
+
+        result = await activity.is_screen_locked(bus)
+
+        assert result is True
+        assert bus.introspect.await_count == 1
+        bus.introspect.assert_awaited_once_with(
+            activity.FDO_SCREENSAVER_BUS, activity.FDO_SCREENSAVER_PATH
+        )
+
+    @pytest.mark.asyncio
+    async def test_xdg_current_desktop_not_gnome_does_not_match_substring(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "NOT-GNOME")
         bus = MagicMock()
         bus.introspect = AsyncMock(return_value=object())
         iface = MagicMock()

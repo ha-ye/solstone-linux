@@ -76,6 +76,14 @@ def _is_service_missing(exc: BaseException) -> bool:
     )
 
 
+def _is_gnome_desktop() -> bool:
+    """True if any XDG_CURRENT_DESKTOP token equals 'gnome' (case-insensitive)."""
+    return any(
+        token.strip().casefold() == "gnome"
+        for token in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+    )
+
+
 async def _name_has_owner(bus: MessageBus, bus_name: str) -> bool:
     """Ask the bus daemon whether a well-known name is currently owned.
 
@@ -145,30 +153,36 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
 
 
 async def is_screen_locked(bus: MessageBus) -> bool:
-    """Check if the screen is locked via FDO ScreenSaver, then GNOME ScreenSaver.
+    """Check if the screen is locked.
 
-    Returns True if locked, False if unlocked or all backends unavailable.
+    On GNOME, probes only org.gnome.ScreenSaver — the FDO ScreenSaver bus
+    on GNOME serves idle-inhibit endpoints only and does not implement
+    GetActive. On non-GNOME desktops, tries FDO ScreenSaver first (KDE
+    kwin and other compliant desktops), then falls back to GNOME
+    ScreenSaver. Returns True if locked, False if unlocked or all
+    backends unavailable.
     """
-    # Try freedesktop.org ScreenSaver first (KDE kwin + GNOME)
-    try:
-        intro = await bus.introspect(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH)
-        obj = bus.get_proxy_object(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH, intro)
-        iface = obj.get_interface(FDO_SCREENSAVER_IFACE)
-        return bool(await iface.call_get_active())
-    except (
-        DBusError,
-        InvalidMemberNameError,
-        InvalidIntrospectionError,
-        OSError,
-    ) as exc:
-        if not _is_service_missing(exc):
-            logger.warning(
-                "is_screen_locked FDO backend failed: service=%s path=%s: %s: %s",
-                FDO_SCREENSAVER_BUS,
-                FDO_SCREENSAVER_PATH,
-                type(exc).__name__,
-                exc,
-            )
+    if not _is_gnome_desktop():
+        # Try freedesktop.org ScreenSaver first (KDE kwin and other non-GNOME desktops)
+        try:
+            intro = await bus.introspect(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH)
+            obj = bus.get_proxy_object(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH, intro)
+            iface = obj.get_interface(FDO_SCREENSAVER_IFACE)
+            return bool(await iface.call_get_active())
+        except (
+            DBusError,
+            InvalidMemberNameError,
+            InvalidIntrospectionError,
+            OSError,
+        ) as exc:
+            if not _is_service_missing(exc):
+                logger.warning(
+                    "is_screen_locked FDO backend failed: service=%s path=%s: %s: %s",
+                    FDO_SCREENSAVER_BUS,
+                    FDO_SCREENSAVER_PATH,
+                    type(exc).__name__,
+                    exc,
+                )
 
     # Fall back to GNOME ScreenSaver
     try:
