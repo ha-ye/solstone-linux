@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import doctor
+from . import doctor, streams
 from .config import load_config, save_config
 from .streams import stream_name
 
@@ -69,6 +69,120 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_setup(args: argparse.Namespace) -> int:
     """Interactive setup — configure server URL and register."""
+    cli_token = args.token if getattr(args, "token", None) else None
+    env_token = os.environ.get("SOLSTONE_TOKEN")
+    token = cli_token or env_token
+    non_interactive = getattr(args, "non_interactive", False)
+
+    if (
+        cli_token is None
+        and env_token is None
+        and getattr(args, "server_url", None) is None
+        and getattr(args, "stream_name", None) is None
+        and not non_interactive
+    ):
+        return _cmd_setup_interactive()
+
+    if cli_token:
+        print(
+            "warning: --token on the command line may be visible in shell history and /proc on shared machines",
+            file=sys.stderr,
+        )
+
+    from .upload import UploadClient
+
+    config = load_config()
+
+    server_url = getattr(args, "server_url", None) or config.server_url
+    if not server_url:
+        if non_interactive:
+            print(
+                "error: --server-url required with --non-interactive", file=sys.stderr
+            )
+            return 2
+        default_url = config.server_url or ""
+        url = input(f"Solstone server URL [{default_url}]: ").strip()
+        if url:
+            server_url = url
+        elif not config.server_url:
+            print("Error: server URL is required", file=sys.stderr)
+            return 1
+    config.server_url = server_url
+
+    stream_override = getattr(args, "stream_name", None)
+    if stream_override:
+        config.stream = stream_override
+    elif not config.stream:
+        try:
+            config.stream = streams.stream_name(host=socket.gethostname())
+        except ValueError as e:
+            print(f"Error deriving stream name: {e}", file=sys.stderr)
+            return 1
+
+    config.ensure_dirs()
+
+    if token:
+        config.key = token
+        save_config(config)
+        print(f"Server: {config.server_url}")
+        print(f"Stream: {config.stream}")
+        print("Using provided token; skipping registration.")
+        print(f"\nConfig saved to {config.config_path}")
+        print(f"Captures will go to {config.captures_dir}")
+        print(
+            "\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd."
+        )
+        return 0
+
+    print(f"Stream: {config.stream}")
+    save_config(config)
+
+    if not config.key:
+        sol = shutil.which("sol")
+        if sol:
+            print("Registering via sol CLI...")
+            try:
+                result = subprocess.run(
+                    [sol, "observer", "--json", "create", config.stream],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    data = json.loads(result.stdout)
+                    config.key = data["key"]
+                    save_config(config)
+                    print(f"Registered (key: {config.key[:8]}...)")
+                else:
+                    print("CLI registration failed, trying HTTP...")
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
+                print("CLI registration failed, trying HTTP...")
+
+        if not config.key:
+            print("Registering with server...")
+            client = UploadClient(config)
+            if client.ensure_registered(config):
+                config = load_config()
+                print(f"Registered (key: {config.key[:8]}...)")
+            else:
+                print(
+                    "Warning: registration failed. Run setup again when server is available."
+                )
+                if non_interactive:
+                    return 1
+    else:
+        print(f"Already registered (key: {config.key[:8]}...)")
+
+    print(f"\nConfig saved to {config.config_path}")
+    print(f"Captures will go to {config.captures_dir}")
+    print(
+        "\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd."
+    )
+    return 0
+
+
+def _cmd_setup_interactive() -> int:
+    # Keep the legacy no-flags setup path separate so its prompt/output stays byte-identical.
     from .upload import UploadClient
 
     config = load_config()
@@ -325,10 +439,27 @@ def main() -> None:
     )
 
     # setup
-    subparsers.add_parser("setup", help="Interactive configuration")
+    setup_parser = subparsers.add_parser("setup", help="Interactive configuration")
+    setup_parser.add_argument("--server-url", help="Server URL (skips prompt)")
+    setup_parser.add_argument(
+        "--token",
+        help="Pre-issued registration key; skips server registration",
+    )
+    setup_parser.add_argument(
+        "--stream-name",
+        help="Stream name (defaults to hostname-derived)",
+    )
+    setup_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Fail instead of prompting for missing values",
+    )
 
     # doctor
-    subparsers.add_parser("doctor", help="Verify install prerequisites")
+    subparsers.add_parser(
+        "doctor",
+        help="Verify install prerequisites",
+    )
 
     # install-service
     subparsers.add_parser("install-service", help="Install systemd user service")

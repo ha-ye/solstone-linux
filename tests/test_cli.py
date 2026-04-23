@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from solstone_linux import cli as cli_module
-from solstone_linux.cli import cmd_install_service
+from solstone_linux.cli import cmd_install_service, cmd_setup
+from solstone_linux.config import Config
 
 
 def _args() -> argparse.Namespace:
@@ -116,3 +117,92 @@ def test_cmd_install_service_always_rewrites(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert "nothing to do" not in captured.out.lower()
     assert run_mock.call_count == 8
+
+
+def test_cmd_setup_non_interactive_happy_path(tmp_path: Path):
+    args = argparse.Namespace(
+        server_url="https://x",
+        token="t",
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch("solstone_linux.cli.load_config", return_value=config):
+        with patch("solstone_linux.cli.save_config") as save_mock:
+            with patch("solstone_linux.cli.streams.stream_name", return_value="host-a"):
+                with patch("solstone_linux.upload.UploadClient.ensure_registered"):
+                    assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    assert saved_config.server_url == "https://x"
+    assert saved_config.key == "t"
+    assert saved_config.stream == "host-a"
+
+
+def test_cmd_setup_non_interactive_missing_server_url_fails(tmp_path: Path, capsys):
+    args = argparse.Namespace(
+        server_url=None,
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.upload.UploadClient.ensure_registered"):
+                assert cmd_setup(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--server-url" in captured.err
+
+
+def test_cmd_setup_env_token_fallback(tmp_path: Path, capsys):
+    args = argparse.Namespace(
+        server_url="https://x",
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {"SOLSTONE_TOKEN": "envtok"}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name",
+                    return_value="host-a",
+                ):
+                    with patch("solstone_linux.upload.UploadClient.ensure_registered"):
+                        assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    captured = capsys.readouterr()
+    assert saved_config.key == "envtok"
+    assert "shared machines" not in captured.err
+
+
+def test_cmd_setup_cli_token_beats_env(tmp_path: Path, capsys):
+    args = argparse.Namespace(
+        server_url="https://x",
+        token="clitok",
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {"SOLSTONE_TOKEN": "envtok"}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name",
+                    return_value="host-a",
+                ):
+                    with patch("solstone_linux.upload.UploadClient.ensure_registered"):
+                        assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    captured = capsys.readouterr()
+    assert saved_config.key == "clitok"
+    assert "shared machines" in captured.err
