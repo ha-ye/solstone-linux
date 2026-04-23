@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -409,16 +410,21 @@ class TestQuarantineZeroByte:
         """A segment with all zero-byte files is renamed to .failed before upload."""
         sync = self._make_sync(tmp_path)
         captures = sync._config.captures_dir
+        fake_now = datetime(2026, 4, 11, 12, 0, 0)
 
         seg = self._create_zero_byte_segment(
             captures, "20260410", "archon", "120000_300"
         )
         server_response = []
 
-        with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
-        ):
-            await sync._sync()
+        with patch("solstone_linux.sync.datetime", wraps=datetime) as mock_datetime:
+            mock_datetime.now.return_value = fake_now
+            with patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+                return_value=server_response,
+            ):
+                await sync._sync()
 
         assert not seg.exists()
         assert seg.with_name("120000_300.failed").exists()
@@ -806,6 +812,28 @@ class TestCleanupFailedSegments:
 
         assert (captures / "20260101" / "archon" / "120000_300.failed").exists()
         mock_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_segments_kept_within_retention(self, tmp_path: Path):
+        """.failed segments are kept when the synced day is still within retention."""
+        sync = self._make_sync(tmp_path, retention=7)
+        captures = sync._config.captures_dir
+        fake_now = datetime(2026, 1, 8, 12, 0, 0)
+
+        seg = self._create_segment(captures, "20260107", "archon", "120000_300.failed")
+        sync._synced_days.add("20260107")
+
+        server_response = []
+        with patch("solstone_linux.sync.datetime", wraps=datetime) as mock_datetime:
+            mock_datetime.now.return_value = fake_now
+            with patch(
+                "asyncio.to_thread",
+                new_callable=AsyncMock,
+                return_value=server_response,
+            ):
+                await sync._cleanup_synced_segments()
+
+        assert seg.exists()
 
     @pytest.mark.asyncio
     async def test_incomplete_still_skipped(self, tmp_path: Path):
