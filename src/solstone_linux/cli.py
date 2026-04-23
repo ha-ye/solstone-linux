@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import doctor
 from .config import load_config, save_config
 from .streams import stream_name
 
@@ -135,6 +136,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd."
     )
     return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    return doctor.run_doctor()
 
 
 def cmd_install_service(args: argparse.Namespace) -> int:
@@ -322,6 +327,9 @@ def main() -> None:
     # setup
     subparsers.add_parser("setup", help="Interactive configuration")
 
+    # doctor
+    subparsers.add_parser("doctor", help="Verify install prerequisites")
+
     # install-service
     subparsers.add_parser("install-service", help="Install systemd user service")
 
@@ -337,6 +345,7 @@ def main() -> None:
     commands = {
         "run": cmd_run,
         "setup": cmd_setup,
+        "doctor": cmd_doctor,
         "install-service": cmd_install_service,
         "status": cmd_status,
     }
