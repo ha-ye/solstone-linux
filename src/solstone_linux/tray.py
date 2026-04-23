@@ -124,6 +124,7 @@ class TrayApp:
 
         # Set initial icon
         self.sni.set_icon(ICONS["recording"])
+        self._update_accessible_descriptions()
         self.sni.set_tooltip("solstone observer", "starting...")
 
         # Build menu
@@ -392,6 +393,7 @@ class TrayApp:
             self.sni.set_status("NeedsAttention")
         else:
             self.sni.set_status("Active")
+        self._update_accessible_descriptions()
 
         log.info(f"Status -> {status} (icon: {icon})")
 
@@ -427,6 +429,7 @@ class TrayApp:
                 self.sni.set_icon(ICONS.get(self.status, ICONS["recording"]))
 
         self.sni.set_tooltip("solstone observer", self._build_tooltip())
+        self._update_accessible_descriptions()
 
     def _update_live_stats(self, segment_timer: int, pause_remaining: int):
         """Update the live stats in the status submenu."""
@@ -488,6 +491,25 @@ class TrayApp:
             parts.append(self.error)
 
         return "\n".join(parts)
+
+    def _update_accessible_descriptions(self):
+        if self.error:
+            desc = "Solstone observer — error"
+        elif self.sync_status in ("syncing", "uploading", "retrying"):
+            desc = "Solstone observer — syncing"
+        elif self.status == "paused":
+            desc = "Solstone observer — paused"
+        elif self.status == "idle":
+            desc = "Solstone observer — idle"
+        elif self.status == "stopped":
+            desc = "Solstone observer — stopped"
+        else:
+            desc = "Solstone observer — recording"
+            if self.config.stream:
+                desc = f"{desc} ({self.config.stream})"
+
+        self.sni.set_icon_accessible_desc(desc)
+        self.sni.set_attention_accessible_desc(desc)
 
     # ── Menu callbacks ──
 

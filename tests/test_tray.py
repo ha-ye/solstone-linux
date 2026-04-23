@@ -11,6 +11,7 @@ import pytest
 
 from solstone_linux.config import Config
 from solstone_linux.dbusmenu import MenuItem, separator
+from solstone_linux.sni import StatusNotifierItem
 from solstone_linux.tray import (
     AGENT_INSTRUCTIONS,
     ICONS,
@@ -289,6 +290,17 @@ class TestBuildTooltip:
         tooltip = app._build_tooltip()
 
         assert "sync: 2/5" in tooltip
+
+
+class TestStatusNotifierItem:
+    def test_accessible_desc_properties(self):
+        sni = StatusNotifierItem()
+
+        sni.set_icon_accessible_desc("Solstone observer — recording")
+        sni.set_attention_accessible_desc("Solstone observer — recording")
+
+        assert sni.IconAccessibleDesc == "Solstone observer — recording"
+        assert sni.AttentionAccessibleDesc == "Solstone observer — recording"
 
 
 class TestUpdate:

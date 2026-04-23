@@ -35,7 +35,9 @@ class StatusNotifierItem(ServiceInterface):
         self._status = "Active"  # Passive, Active, NeedsAttention
         self._title = "solstone observer"
         self._icon_name = "solstone-recording"
+        self._icon_accessible_desc = ""
         self._attention_icon_name = ""
+        self._attention_accessible_desc = ""
         self._overlay_icon_name = ""
         self._tooltip_icon = ""
         self._tooltip_title = "solstone observer"
@@ -55,6 +57,11 @@ class StatusNotifierItem(ServiceInterface):
         if self._icon_name != icon_name:
             self._icon_name = icon_name
             self.NewIcon()
+
+    def set_icon_accessible_desc(self, desc: str):
+        if self._icon_accessible_desc != desc:
+            self._icon_accessible_desc = desc
+            self.emit_properties_changed({"IconAccessibleDesc": desc})
 
     def set_status(self, status: str):
         """Set Active, Passive, or NeedsAttention."""
@@ -77,6 +84,11 @@ class StatusNotifierItem(ServiceInterface):
     def set_attention_icon(self, icon_name: str):
         self._attention_icon_name = icon_name
         self.NewAttentionIcon()
+
+    def set_attention_accessible_desc(self, desc: str):
+        if self._attention_accessible_desc != desc:
+            self._attention_accessible_desc = desc
+            self.emit_properties_changed({"AttentionAccessibleDesc": desc})
 
     def set_overlay_icon(self, icon_name: str):
         self._overlay_icon_name = icon_name
@@ -109,6 +121,10 @@ class StatusNotifierItem(ServiceInterface):
         return self._icon_name
 
     @dbus_property(access=PropertyAccess.READ)
+    def IconAccessibleDesc(self) -> "s":
+        return self._icon_accessible_desc
+
+    @dbus_property(access=PropertyAccess.READ)
     def IconPixmap(self) -> "a(iiay)":
         return []
 
@@ -123,6 +139,10 @@ class StatusNotifierItem(ServiceInterface):
     @dbus_property(access=PropertyAccess.READ)
     def AttentionIconName(self) -> "s":
         return self._attention_icon_name
+
+    @dbus_property(access=PropertyAccess.READ)
+    def AttentionAccessibleDesc(self) -> "s":
+        return self._attention_accessible_desc
 
     @dbus_property(access=PropertyAccess.READ)
     def AttentionIconPixmap(self) -> "a(iiay)":
