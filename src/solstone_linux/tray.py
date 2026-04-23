@@ -384,8 +384,8 @@ class TrayApp:
             self._resume_item.label = f"resume ({mins}m remaining)"
         else:
             self._resume_item.label = "resume"
-        self.menu.update_item(self._pause_submenu)
-        self.menu.update_item(self._resume_item)
+        self.menu.update_properties(self._pause_submenu, "visible")
+        self.menu.update_properties(self._resume_item, "visible", "label")
 
         # SNI status
         if status == "stopped" or self.error:
@@ -401,7 +401,7 @@ class TrayApp:
             return
         self._status_header.label = label
         self._status_item.label = label
-        self.menu.update_item(self._status_header)
+        self.menu.update_properties(self._status_header, "label")
 
     def _update_sync(self, sync_status: str, progress: str):
         """Update sync status display."""

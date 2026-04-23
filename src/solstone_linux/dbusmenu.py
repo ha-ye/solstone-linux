@@ -101,21 +101,32 @@ class DBusMenu(ServiceInterface):
         self._revision += 1
         self.LayoutUpdated(self._revision, 0)
 
-    def update_item(self, item: MenuItem):
-        """Signal that a menu item's properties changed.
+    def update_properties(self, item: MenuItem, *names: str):
+        if not names:
+            return
 
-        We emit LayoutUpdated rather than ItemsPropertiesUpdated
-        because it's simpler and universally supported. The tray
-        host will re-read the layout on next menu open.
-        """
-        self._revision += 1
-        self.LayoutUpdated(self._revision, 0)
+        updated = {name: self._property_variant(item, name) for name in names}
+        self.ItemsPropertiesUpdated([[item.id, updated]], [])
 
     def _register_items(self, items: list[MenuItem]):
         for item in items:
             self._items[item.id] = item
             if item.children:
                 self._register_items(item.children)
+
+    def _property_variant(self, item: MenuItem, name: str) -> Variant:
+        if name == "label":
+            return Variant("s", item.label)
+        if name == "visible":
+            return Variant("b", item.visible)
+        if name == "enabled":
+            return Variant("b", item.enabled)
+        if name == "icon-name":
+            return Variant("s", item.icon_name)
+        if name == "toggle-state":
+            return Variant("i", item.toggle_state)
+
+        raise ValueError(f"unsupported menu property: {name}")
 
     def _build_layout(self, item: MenuItem, depth: int, props: list[str]):
         """Build the (ia{sv}av) layout tuple for GetLayout."""
@@ -187,7 +198,7 @@ class DBusMenu(ServiceInterface):
 
     @method()
     def AboutToShow(self, item_id: "i") -> "b":
-        return True  # tell host to re-read layout (fresh labels on open)
+        return False  # GetLayout always returns fresh state; no pending unsignaled changes.
 
     @method()
     def AboutToShowGroup(self, ids: "ai") -> "aiai":

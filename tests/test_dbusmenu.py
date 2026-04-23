@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
+from unittest.mock import MagicMock
+
 from dbus_next import Variant
 
-from solstone_linux.dbusmenu import MenuItem
+from solstone_linux.dbusmenu import DBusMenu, MenuItem
 
 
 def test_default_emits_enabled_and_visible_true():
@@ -37,3 +39,49 @@ def test_other_keys_still_conditional():
     assert "icon-name" not in props
     assert "toggle-type" not in props
     assert "children-display" not in props
+
+
+def test_update_properties_emits_items_properties_updated():
+    menu = DBusMenu()
+    item = MenuItem(label="resume", visible=True)
+    menu.set_menu([item])
+    menu.ItemsPropertiesUpdated = MagicMock()
+    menu.LayoutUpdated = MagicMock()
+    revision = menu._revision
+    item.visible = False
+
+    menu.update_properties(item, "visible")
+
+    menu.ItemsPropertiesUpdated.assert_called_once()
+    menu.LayoutUpdated.assert_not_called()
+    assert menu._revision == revision
+
+    updated_props, removed_props = menu.ItemsPropertiesUpdated.call_args.args
+    assert removed_props == []
+    assert len(updated_props) == 1
+    item_id, props = updated_props[0]
+    assert item_id == item.id
+    assert props.keys() == {"visible"}
+    assert props["visible"].signature == "b"
+    assert props["visible"].value is False
+
+
+def test_update_properties_noop_when_no_names():
+    menu = DBusMenu()
+    item = MenuItem(label="resume")
+    menu.set_menu([item])
+    menu.ItemsPropertiesUpdated = MagicMock()
+    menu.LayoutUpdated = MagicMock()
+    revision = menu._revision
+
+    menu.update_properties(item)
+
+    menu.ItemsPropertiesUpdated.assert_not_called()
+    menu.LayoutUpdated.assert_not_called()
+    assert menu._revision == revision
+
+
+def test_about_to_show_returns_false():
+    menu = DBusMenu()
+
+    assert DBusMenu.AboutToShow.__wrapped__(menu, 0) is False

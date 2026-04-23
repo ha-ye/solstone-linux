@@ -3,6 +3,7 @@
 
 import time
 from pathlib import Path
+from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -72,14 +73,22 @@ class TestUpdateStatus:
     def test_update_status_paused(self):
         app = _make_app()
         app._build_menu()
-        app.menu.update_item = MagicMock()
+        app.menu.update_properties = MagicMock()
 
         app._update_status("paused")
 
         assert app.status == "paused"
         assert app._pause_submenu.visible is False
         assert app._resume_item.visible is True
-        assert app.menu.update_item.call_count == 2
+        assert app.menu.update_properties.call_count >= 2
+        assert (
+            call(app._pause_submenu, "visible")
+            in app.menu.update_properties.call_args_list
+        )
+        assert (
+            call(app._resume_item, "visible", "label")
+            in app.menu.update_properties.call_args_list
+        )
 
     def test_update_status_idle(self):
         app = _make_app()
@@ -156,7 +165,7 @@ class TestUpdateLiveStats:
     def test_update_live_stats_skips_unchanged_menu_updates(self):
         app = _make_app()
         app._build_menu()
-        app.menu.update_item = MagicMock()
+        app.menu.update_properties = MagicMock()
         app.stats = {
             "captures_today": 5,
             "total_size_mb": 42,
@@ -165,14 +174,29 @@ class TestUpdateLiveStats:
         }
 
         app._update_live_stats(245, 0)
-        app.menu.update_item.reset_mock()
+        app.menu.update_properties.reset_mock()
 
         app._update_live_stats(245, 0)
 
-        app.menu.update_item.assert_not_called()
+        app.menu.update_properties.assert_not_called()
 
 
 class TestHeaderLabel:
+    def test_update_header_emits_label_property_update(self):
+        app = _make_app()
+        app._build_menu()
+        app.menu.update_properties = MagicMock()
+        app.sync_status = "offline"
+
+        app._update_header(0)
+        app.menu.update_properties.reset_mock()
+
+        app.sync_status = "synced"
+        app._update_header(0)
+
+        app.menu.update_properties.assert_called_with(app._status_header, "label")
+        assert app._status_header.label == "observing — connected"
+
     def test_header_recording_synced(self):
         app = _make_app()
         app._build_menu()
