@@ -22,6 +22,14 @@ if it's already active and connected, you're done.
 - **system dependencies.** the observer needs PyGObject, GStreamer, and PipeWire bindings from system packages. installing these requires sudo.
 - **stream name.** this identifies the capture source. the machine's hostname is the typical choice.
 
+### remote sol
+
+The observer talks to the solstone server over HTTPS — colocation is optional. For remote-sol setups:
+
+- clone anywhere; the `$(sol root)/observers` path in step 2 only applies when sol is installed locally.
+- `solstone-linux setup` will prompt for the server URL (since local `sol remote list` isn't available) and auto-register the observer with the server via HTTP, persisting the returned key. No manual key handoff is needed if the server's observer-registration endpoint is reachable.
+- otherwise, the install sequence below is the same.
+
 ## install sequence
 
 1. install system dependencies for your distro, including `pipx`. if you need sudo, walk your human through it.
@@ -41,7 +49,16 @@ if it's already active and connected, you're done.
    sudo pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib xdg-desktop-portal pipx
    ```
 
-2. if not already cloned, clone into solstone's observers directory and install:
+   **opensuse:**
+   ```
+   sudo zypper install python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 \
+     gtk4-tools gstreamer-plugins-base gstreamer-plugin-pipewire \
+     pipewire-pulseaudio pulseaudio-utils alsa-devel \
+     xdg-desktop-portal python3-pipx
+   ```
+   note: package names diverge from Fedora — `typelib-1_0-Gtk-4_0` (not `gtk4`), `gstreamer-plugin-pipewire` (singular), and `alsa-devel` (not `alsa-lib-devel`).
+
+2. If you have local sol, cloning into `$(sol root)/observers` keeps observers colocated with the server. For remote-sol setups, clone anywhere — the observer runs independently of the server at runtime:
    ```
    cd "$(sol root)/observers"
    git clone https://github.com/solpbc/solstone-linux.git
@@ -90,5 +107,17 @@ then log out and back in, or restart GNOME Shell (Alt+F2, type `r`, enter). enab
 ```
 sudo pacman -S gnome-shell-extension-appindicator
 ```
+
+**other distros (openSUSE, etc.):**
+
+if your distro doesn't ship an AppIndicator extension package, install it from extensions.gnome.org via the CLI:
+
+```
+curl -LO https://extensions.gnome.org/extension-data/appindicatorsupportrgcjonas.gmail.com.v64.shell-extension.zip
+gnome-extensions install appindicatorsupportrgcjonas.gmail.com.v64.shell-extension.zip
+gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
+```
+
+then restart GNOME Shell — on Wayland, log out and back in; on X11, press Alt+F2 and type `r`. v64 supports GNOME Shell 45–50; check https://extensions.gnome.org/extension/615/appindicator-support/ for a newer build if you're on a later shell.
 
 to check if it's working: `gnome-extensions list | grep appindicator` should show it. if the tray icon still doesn't appear, verify it's enabled: `gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com`
