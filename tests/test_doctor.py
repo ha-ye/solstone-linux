@@ -3,6 +3,8 @@
 
 import sys
 
+import pytest
+
 from solstone_linux import doctor
 
 
@@ -147,3 +149,136 @@ def test_appindicator_non_gnome_is_ok_not_applicable(monkeypatch):
 
     assert result.severity == "ok"
     assert "not applicable" in result.detail
+
+
+class _FakeIface:
+    def __init__(self, owned=True, raises=None):
+        self._owned = owned
+        self._raises = raises
+
+    async def call_name_has_owner(self, name):
+        if self._raises is not None:
+            raise self._raises
+        return self._owned
+
+
+class _FakeProxy:
+    def __init__(self, iface):
+        self._iface = iface
+
+    def get_interface(self, name):
+        return self._iface
+
+
+class _FakeBus:
+    def __init__(
+        self,
+        bus_type=None,
+        iface=None,
+        connect_exc=None,
+        introspect_exc_for_portal=None,
+        introspect_hang=False,
+    ):
+        self._iface = iface or _FakeIface()
+        self._connect_exc = connect_exc
+        self._introspect_exc_for_portal = introspect_exc_for_portal
+        self._introspect_hang = introspect_hang
+        self.introspect_calls = []
+        self.disconnected = False
+
+    async def connect(self):
+        if self._connect_exc is not None:
+            raise self._connect_exc
+        return self
+
+    async def introspect(self, service, path):
+        self.introspect_calls.append((service, path))
+        if service == "org.freedesktop.portal.Desktop":
+            if self._introspect_exc_for_portal is not None:
+                raise self._introspect_exc_for_portal
+        if self._introspect_hang:
+            import asyncio as _a
+
+            await _a.Event().wait()
+        return object()
+
+    def get_proxy_object(self, service, path, intro):
+        return _FakeProxy(self._iface)
+
+    def disconnect(self):
+        self.disconnected = True
+
+
+@pytest.mark.asyncio
+async def test_check_portal_registered_returns_ok(monkeypatch):
+    fake_instance = _FakeBus(iface=_FakeIface(owned=True))
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "ok"
+    assert "registered" in result.detail
+    assert fake_instance.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_check_portal_not_registered_returns_fail(monkeypatch):
+    fake_instance = _FakeBus(iface=_FakeIface(owned=False))
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "fail"
+    assert "not registered" in result.detail
+    assert "unreachable" not in result.detail
+    assert "timed out" not in result.detail
+
+
+@pytest.mark.asyncio
+async def test_check_portal_bus_unreachable_returns_fail(monkeypatch):
+    fake_instance = _FakeBus(connect_exc=OSError("no bus"))
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "fail"
+    assert "unreachable" in result.detail
+    assert "no bus" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_check_portal_timeout_returns_fail(monkeypatch):
+    fake_instance = _FakeBus(introspect_hang=True)
+    monkeypatch.setattr(doctor, "_PORTAL_CHECK_TIMEOUT_SEC", 0.05)
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "fail"
+    assert "timed out" in result.detail
+    assert fake_instance.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_check_portal_tolerates_hyphenated_portal_properties(monkeypatch):
+    from dbus_next.errors import InvalidMemberNameError
+
+    fake_instance = _FakeBus(
+        iface=_FakeIface(owned=True),
+        introspect_exc_for_portal=InvalidMemberNameError(
+            "invalid member name: power-saver-enabled"
+        ),
+    )
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "ok"
+    assert "registered" in result.detail
+    assert all(
+        service != "org.freedesktop.portal.Desktop"
+        for service, _path in fake_instance.introspect_calls
+    ), (
+        "check_portal() should not introspect org.freedesktop.portal.Desktop; "
+        f"calls were {fake_instance.introspect_calls!r}"
+    )

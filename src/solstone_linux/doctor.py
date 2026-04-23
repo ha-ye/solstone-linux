@@ -20,6 +20,8 @@ CheckResult = NamedTuple(
     [("name", str), ("severity", str), ("detail", str)],
 )
 
+_PORTAL_CHECK_TIMEOUT_SEC: float = 2.0
+
 
 def check_python_version() -> CheckResult:
     version = tuple(sys.version_info[:2])
@@ -100,24 +102,59 @@ def check_pipewire() -> CheckResult:
 async def check_portal() -> CheckResult:
     from dbus_next.aio import MessageBus
     from dbus_next.constants import BusType
+    from dbus_next.errors import AuthError, DBusError, InvalidAddressError
 
-    bus = None
+    async def _body() -> CheckResult:
+        bus = None
+        try:
+            try:
+                bus = await MessageBus(bus_type=BusType.SESSION).connect()
+            except (OSError, AuthError, InvalidAddressError, DBusError) as e:
+                return CheckResult(
+                    "xdg-desktop-portal",
+                    "fail",
+                    f"session bus unreachable: {e}",
+                )
+            try:
+                intro = await bus.introspect(
+                    "org.freedesktop.DBus", "/org/freedesktop/DBus"
+                )
+                obj = bus.get_proxy_object(
+                    "org.freedesktop.DBus", "/org/freedesktop/DBus", intro
+                )
+                iface = obj.get_interface("org.freedesktop.DBus")
+                owned = await iface.call_name_has_owner(
+                    "org.freedesktop.portal.Desktop"
+                )
+            except (DBusError, OSError) as e:
+                return CheckResult(
+                    "xdg-desktop-portal",
+                    "fail",
+                    f"session bus unreachable: {e}",
+                )
+            if owned:
+                return CheckResult(
+                    "xdg-desktop-portal",
+                    "ok",
+                    "org.freedesktop.portal.Desktop registered on session bus",
+                )
+            return CheckResult(
+                "xdg-desktop-portal",
+                "fail",
+                "org.freedesktop.portal.Desktop not registered on session bus",
+            )
+        finally:
+            if bus is not None:
+                bus.disconnect()
+
     try:
-        bus = await MessageBus(bus_type=BusType.SESSION).connect()
-        await bus.introspect(
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-        )
-    except Exception:
+        return await asyncio.wait_for(_body(), timeout=_PORTAL_CHECK_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
         return CheckResult(
             "xdg-desktop-portal",
             "fail",
-            "xdg-desktop-portal not responding on session bus",
+            f"timed out after {_PORTAL_CHECK_TIMEOUT_SEC:g}s",
         )
-    finally:
-        if bus is not None:
-            bus.disconnect()
-    return CheckResult("xdg-desktop-portal", "ok", "portal responding")
 
 
 def check_user_systemd() -> CheckResult:
