@@ -9,13 +9,26 @@ degrades gracefully — returning a safe default — so the observer keeps
 running regardless of desktop environment.
 """
 
+import asyncio
 import logging
 import os
 
 from dbus_next import Variant
 from dbus_next.aio import MessageBus
+from dbus_next.errors import (
+    DBusError,
+    InvalidIntrospectionError,
+    InvalidMemberNameError,
+)
 
 logger = logging.getLogger(__name__)
+
+_DBUS_PROBE_TIMEOUT_SEC = 2.0
+
+_SERVICE_MISSING_ERRORS = (
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.NameHasNoOwner",
+)
 
 # GTK4/GDK4 — optional, only needed for monitor geometry detection.
 # On systems without GTK4, get_monitor_geometries() will raise RuntimeError
@@ -55,6 +68,42 @@ KSCREEN_PATH = "/backend"
 KSCREEN_IFACE = "org.kde.kscreen.Backend"
 
 
+def _is_service_missing(exc: BaseException) -> bool:
+    """True if exc is a DBusError meaning the bus name is not currently owned."""
+    return (
+        isinstance(exc, DBusError)
+        and getattr(exc, "type", "") in _SERVICE_MISSING_ERRORS
+    )
+
+
+async def _name_has_owner(bus: MessageBus, bus_name: str) -> bool:
+    """Ask the bus daemon whether a well-known name is currently owned.
+
+    Returns False on any probe failure (daemon unreachable, timeout, parser
+    error) after logging a warning — the service is treated as absent.
+    """
+
+    async def _probe() -> bool:
+        intro = await bus.introspect("org.freedesktop.DBus", "/org/freedesktop/DBus")
+        obj = bus.get_proxy_object(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", intro
+        )
+        iface = obj.get_interface("org.freedesktop.DBus")
+        return bool(await iface.call_name_has_owner(bus_name))
+
+    try:
+        return await asyncio.wait_for(_probe(), timeout=_DBUS_PROBE_TIMEOUT_SEC)
+    except (DBusError, InvalidMemberNameError, OSError, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "NameHasOwner probe failed: service=%s path=%s: %s: %s",
+            bus_name,
+            "/org/freedesktop/DBus",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     """Check which activity DBus services are reachable."""
     services = {
@@ -66,11 +115,7 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     }
     results = {}
     for name, bus_name in services.items():
-        try:
-            await bus.introspect(bus_name, "/")
-            results[name] = True
-        except Exception:
-            results[name] = False
+        results[name] = await _name_has_owner(bus, bus_name)
 
     # Log grouped by function
     lock_backends = ["fdo_screensaver", "gnome_screensaver"]
@@ -110,8 +155,20 @@ async def is_screen_locked(bus: MessageBus) -> bool:
         obj = bus.get_proxy_object(FDO_SCREENSAVER_BUS, FDO_SCREENSAVER_PATH, intro)
         iface = obj.get_interface(FDO_SCREENSAVER_IFACE)
         return bool(await iface.call_get_active())
-    except Exception:
-        pass
+    except (
+        DBusError,
+        InvalidMemberNameError,
+        InvalidIntrospectionError,
+        OSError,
+    ) as exc:
+        if not _is_service_missing(exc):
+            logger.warning(
+                "is_screen_locked FDO backend failed: service=%s path=%s: %s: %s",
+                FDO_SCREENSAVER_BUS,
+                FDO_SCREENSAVER_PATH,
+                type(exc).__name__,
+                exc,
+            )
 
     # Fall back to GNOME ScreenSaver
     try:
@@ -119,7 +176,20 @@ async def is_screen_locked(bus: MessageBus) -> bool:
         obj = bus.get_proxy_object(GNOME_SCREENSAVER_BUS, GNOME_SCREENSAVER_PATH, intro)
         iface = obj.get_interface(GNOME_SCREENSAVER_IFACE)
         return bool(await iface.call_get_active())
-    except Exception:
+    except (
+        DBusError,
+        InvalidMemberNameError,
+        InvalidIntrospectionError,
+        OSError,
+    ) as exc:
+        if not _is_service_missing(exc):
+            logger.warning(
+                "is_screen_locked GNOME backend failed: service=%s path=%s: %s: %s",
+                GNOME_SCREENSAVER_BUS,
+                GNOME_SCREENSAVER_PATH,
+                type(exc).__name__,
+                exc,
+            )
         return False
 
 
@@ -136,8 +206,20 @@ async def is_power_save_active(bus: MessageBus) -> bool:
         mode_variant = await iface.call_get(DISPLAY_CONFIG_IFACE, "PowerSaveMode")
         mode = int(mode_variant.value)
         return mode != 0
-    except Exception:
-        pass
+    except (
+        DBusError,
+        InvalidMemberNameError,
+        InvalidIntrospectionError,
+        OSError,
+    ) as exc:
+        if not _is_service_missing(exc):
+            logger.warning(
+                "is_power_save_active Mutter backend failed: service=%s path=%s: %s: %s",
+                DISPLAY_CONFIG_BUS,
+                DISPLAY_CONFIG_PATH,
+                type(exc).__name__,
+                exc,
+            )
 
     # Fall back to KDE Solid PowerManagement
     try:
@@ -145,7 +227,20 @@ async def is_power_save_active(bus: MessageBus) -> bool:
         obj = bus.get_proxy_object(KDE_POWER_BUS, KDE_POWER_PATH, intro)
         iface = obj.get_interface(KDE_POWER_IFACE)
         return bool(await iface.call_is_lid_closed())
-    except Exception:
+    except (
+        DBusError,
+        InvalidMemberNameError,
+        InvalidIntrospectionError,
+        OSError,
+    ) as exc:
+        if not _is_service_missing(exc):
+            logger.warning(
+                "is_power_save_active KDE backend failed: service=%s path=%s: %s: %s",
+                KDE_POWER_BUS,
+                KDE_POWER_PATH,
+                type(exc).__name__,
+                exc,
+            )
         return False
 
 
@@ -258,5 +353,18 @@ async def get_monitor_geometries_kscreen(bus: MessageBus) -> list[dict]:
         monitors = assign_monitor_positions(geometries)
         logger.debug("KScreen monitor geometries found: %d", len(monitors))
         return monitors
-    except Exception:
+    except (
+        DBusError,
+        InvalidMemberNameError,
+        InvalidIntrospectionError,
+        OSError,
+    ) as exc:
+        if not _is_service_missing(exc):
+            logger.warning(
+                "get_monitor_geometries_kscreen failed: service=%s path=%s: %s: %s",
+                KSCREEN_BUS,
+                KSCREEN_PATH,
+                type(exc).__name__,
+                exc,
+            )
         return []

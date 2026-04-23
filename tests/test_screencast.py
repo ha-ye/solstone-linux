@@ -3,7 +3,14 @@
 
 """Tests for portal screencast stream matching."""
 
-from solstone_linux.screencast import _match_streams_to_monitors
+import logging
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from dbus_next.errors import DBusError
+
+from solstone_linux.screencast import Screencaster, _match_streams_to_monitors
 
 
 class TestMatchStreamsToMonitors:
@@ -168,3 +175,29 @@ class TestMatchStreamsToMonitors:
         assert result[0]["position_label"] == "left"
         assert result[1]["connector"] == "DP-2"
         assert result[1]["position_label"] == "right"
+
+
+@pytest.mark.asyncio
+async def test_close_session_call_close_failure_logs_and_clears_handle(caplog):
+    screencaster = Screencaster(restore_token_path=Path("/tmp/fake"))
+    mock_bus = MagicMock()
+    session_iface = MagicMock()
+    session_iface.call_close = AsyncMock(
+        side_effect=DBusError("org.freedesktop.DBus.Error.NoReply", "broke")
+    )
+
+    mock_bus.introspect = AsyncMock(return_value=object())
+    mock_bus.get_proxy_object.return_value.get_interface.return_value = session_iface
+    screencaster.bus = mock_bus
+    screencaster.session_handle = "/org/freedesktop/portal/desktop/session/fake"
+
+    with caplog.at_level(logging.WARNING):
+        await screencaster._close_session()
+
+    assert [record.message for record in caplog.records] == [
+        "_close_session failed: "
+        "service=org.freedesktop.portal.Desktop "
+        "path=/org/freedesktop/portal/desktop/session/fake: "
+        "DBusError: broke"
+    ]
+    assert screencaster.session_handle is None

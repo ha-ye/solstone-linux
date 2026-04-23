@@ -32,6 +32,11 @@ from pathlib import Path
 from dbus_next import Variant, introspection
 from dbus_next.aio import MessageBus
 from dbus_next.constants import BusType
+from dbus_next.errors import (
+    DBusError,
+    InvalidIntrospectionError,
+    InvalidMemberNameError,
+)
 
 # Workaround for dbus-next issue #122: portal has properties with hyphens
 # (e.g., "power-saver-enabled") which violate strict D-Bus naming validation.
@@ -543,8 +548,19 @@ class Screencaster:
                 )
                 session_iface = session_obj.get_interface(SESSION_IFACE)
                 await session_iface.call_close()
-            except Exception:
-                pass
+            except (
+                DBusError,
+                InvalidMemberNameError,
+                InvalidIntrospectionError,
+                OSError,
+            ) as exc:
+                logger.warning(
+                    "_close_session failed: service=%s path=%s: %s: %s",
+                    PORTAL_BUS,
+                    self.session_handle,
+                    type(exc).__name__,
+                    exc,
+                )
         self.session_handle = None
 
     def is_healthy(self) -> bool:
