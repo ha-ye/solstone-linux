@@ -1,8 +1,8 @@
 # solstone-linux
 
-Standalone Linux desktop observer for [solstone](https://solpbc.org). Captures screen and audio from a GNOME Wayland session, stores segments locally, and syncs to a solstone server.
+Standalone Linux desktop observer for [solstone](https://solpbc.org). Experiences your screen and audio along with you on a GNOME Wayland session, stores segments locally, and syncs to a solstone server.
 
-**Note:** Activity detection (idle timeout, screen lock, power save) currently requires a GNOME desktop. On other desktops (KDE, Sway, Hyprland, XFCE), screen and audio capture works but activity-based segment boundaries won't trigger.
+**Note:** Activity detection (idle timeout, screen lock, power save) currently requires a GNOME desktop. On other desktops (KDE, Sway, Hyprland, XFCE), the observer still experiences your screen and audio, but activity-based segment boundaries won't trigger.
 
 ## System Dependencies
 

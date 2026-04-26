@@ -1,6 +1,6 @@
 # installing solstone-linux
 
-these instructions are for a coding agent and human working together. solstone-linux is a standalone observer that captures screen and audio on linux desktops using PipeWire and GStreamer, and uploads to a solstone server.
+these instructions are for a coding agent and human working together. solstone-linux is a standalone observer that experiences your screen and audio along with you on linux desktops using PipeWire and GStreamer, and uploads to a solstone server.
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
@@ -20,7 +20,7 @@ if it's already active and connected, you're done.
 ## what to sort out together
 
 - **system dependencies.** the observer needs PyGObject, GStreamer, and PipeWire bindings from system packages. installing these requires sudo.
-- **stream name.** this identifies the capture source. the machine's hostname is the typical choice.
+- **stream name.** this identifies this observer's stream. the machine's hostname is the typical choice.
 
 ### remote sol
 
@@ -86,7 +86,7 @@ git pull && make install-service
 
 ## notes
 
-- activity detection (idle timeout, screen lock, power save) works on both GNOME and KDE. other desktops capture screen and audio fine but may not get activity-based segment boundaries.
+- activity detection (idle timeout, screen lock, power save) works on both GNOME and KDE. on other desktops the observer still experiences your screen and audio fine, but activity-based segment boundaries won't trigger.
 - the tray icon uses the StatusNotifierItem (SNI) D-Bus protocol. it works on KDE natively and GNOME with the AppIndicator extension. if no SNI host is available, the observer runs normally without a tray icon.
 
 ## appendix: GNOME tray support

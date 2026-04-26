@@ -4,7 +4,7 @@ Development guidelines for solstone-linux, a standalone Linux desktop observer.
 
 ## Project Overview
 
-solstone-linux is a companion app that runs alongside the main [solstone](https://solstone.app) journal. It captures screen recordings and audio from a Linux desktop using PipeWire and GStreamer, stores segments locally, and syncs them to a solstone server. It runs as a systemd user service on GNOME Wayland sessions.
+solstone-linux is a companion app that runs alongside the main [solstone](https://solstone.app) journal. It is one of the owner's observers — it experiences screen and audio along with the owner on a Linux desktop using PipeWire and GStreamer, stores segments locally, and syncs them to a solstone server. It runs as a systemd user service on GNOME Wayland sessions.
 
 This is **not** part of the solstone monorepo. It is a standalone package with its own release lifecycle, installed via pipx alongside system-provided PyGObject/GStreamer bindings.
 
@@ -116,6 +116,16 @@ Python packages (in pyproject.toml):
 ## Testing
 
 Tests use pytest with standard mocking. No system dependencies required for tests — audio devices, DBus, and GStreamer are mocked. Run `make test` to execute the full suite.
+
+## Brand canon
+
+- **solstone-linux is an observer.** In the system anatomy, `solstone = observers + sol agent + journal`. This repo implements one of those observers.
+- **The canon lives elsewhere.** Owner-facing terminology comes from `~/projects/extro/cmo/brand/system-anatomy.md`. The companion is `~/projects/extro/cmo/brand/voice-terminology.md`.
+- **Use co-experience language in branded prose.** In README, INSTALL, onboarding text, settings copy, and error messages, describe solstone-linux as something that experiences screen and audio along with the owner. Never describe it as watching, recording, monitoring, or tracking the owner.
+- **Keep code language in code-only contexts.** Internal architecture terms such as `Capture loop`, the capture pipeline, module names, and data-path names are canon-permitted here and must not be renamed just to match branded prose.
+- **Edit with the surface in mind.** If the owner sees the string, follow the canon. If the text is naming code, pipelines, modules, or storage artifacts for engineers, the existing internal vocabulary stays.
+
+Canon source of truth: `~/projects/extro/cmo/brand/system-anatomy.md`.
 
 ## License
 
