@@ -120,12 +120,12 @@ Tests use pytest with standard mocking. No system dependencies required for test
 ## Brand canon
 
 - **solstone-linux is an observer.** In the system anatomy, `solstone = observers + sol agent + journal`. This repo implements one of those observers.
-- **The canon lives elsewhere.** Owner-facing terminology comes from `~/projects/extro/cmo/brand/system-anatomy.md`. The companion is `~/projects/extro/cmo/brand/voice-terminology.md`.
+- **The canon lives elsewhere.** Owner-facing terminology comes from sol pbc's internal brand canon (system anatomy + voice terminology guides). This repo's branded prose follows it; the canon itself is not vendored here.
 - **Use co-experience language in branded prose.** In README, INSTALL, onboarding text, settings copy, and error messages, describe solstone-linux as something that experiences screen and audio along with the owner. Never describe it as watching, recording, monitoring, or tracking the owner.
 - **Keep code language in code-only contexts.** Internal architecture terms such as `Capture loop`, the capture pipeline, module names, and data-path names are canon-permitted here and must not be renamed just to match branded prose.
 - **Edit with the surface in mind.** If the owner sees the string, follow the canon. If the text is naming code, pipelines, modules, or storage artifacts for engineers, the existing internal vocabulary stays.
 
-Canon source of truth: `~/projects/extro/cmo/brand/system-anatomy.md`.
+Canon source of truth: sol pbc's internal brand canon (system-anatomy guide).
 
 ## License
 
