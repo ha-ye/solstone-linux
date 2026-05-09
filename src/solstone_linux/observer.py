@@ -39,6 +39,7 @@ from .activity import (
 )
 from .audio_mute import is_sink_muted
 from .audio_recorder import AudioRecorder
+from .chat_bridge import run_chat_bridge
 from .config import Config
 from .recovery import write_segment_metadata
 from .screencast import Screencaster, StreamInfo
@@ -477,9 +478,15 @@ class Observer:
         logger.info(f"Starting observer loop (interval={self.interval}s)")
 
         # Start sync service as background task
+        bridge_stop_event = asyncio.Event()
+        bridge_task = None
         sync_task = None
         if self._sync:
             sync_task = asyncio.create_task(self._sync.run())
+        if self.config.chat_bridge_enabled:
+            bridge_task = asyncio.create_task(
+                run_chat_bridge(self.config, bridge_stop_event)
+            )
 
         # Determine initial mode (default to screencast if check fails)
         try:
@@ -505,6 +512,13 @@ class Observer:
                     try:
                         await sync_task
                     except asyncio.CancelledError:
+                        pass
+                bridge_stop_event.set()
+                if bridge_task:
+                    bridge_task.cancel()
+                    try:
+                        await bridge_task
+                    except (asyncio.CancelledError, Exception):
                         pass
                 return
         else:
@@ -664,6 +678,13 @@ class Observer:
                 try:
                     await sync_task
                 except asyncio.CancelledError:
+                    pass
+            bridge_stop_event.set()
+            if bridge_task:
+                bridge_task.cancel()
+                try:
+                    await bridge_task
+                except (asyncio.CancelledError, Exception):
                     pass
 
     async def shutdown(self):

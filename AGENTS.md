@@ -35,11 +35,13 @@ contrib/                    Reference icons for development fallback
 
 ## Architecture
 
-The observer runs a single asyncio event loop with two concurrent concerns:
+The observer runs a single asyncio event loop with three concurrent concerns:
 
 1. **Capture loop** (`observer.py`) — Checks activity status every 5 seconds, records audio continuously, manages screencast recording via GStreamer. Creates 5-minute segments in `~/.local/share/solstone-linux/captures/YYYYMMDD/stream/HHMMSS_DDD/`. Segment directories start as `.incomplete` and are renamed on finalization.
 
 2. **Sync service** (`sync.py`) — Background asyncio task that walks the captures directory, queries the server for existing segments, and uploads missing ones. Circuit breaker pattern with error-type-aware thresholds.
+
+3. **Chat bridge** (`chat_bridge.py`) — Background asyncio task that consumes server-sent callosum chat events, mirrors request/clear messages to an optional local FIFO, and fires click-capturing `notify-send` subprocesses when server opt-in allows Linux desktop notifications.
 
 State machine has two modes: `screencast` (screen active, recording video) and `idle` (screen inactive). Mode transitions, mute state changes, and 5-minute intervals all trigger segment boundaries.
 

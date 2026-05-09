@@ -38,6 +38,7 @@ class Config:
     )
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
     cache_retention_days: int = 7
+    chat_bridge_enabled: bool = True
     base_dir: Path = DEFAULT_BASE_DIR
 
     @property
@@ -96,6 +97,7 @@ def load_config(base_dir: Path | None = None) -> Config:
         config.cache_retention_days = int(data.get("cache_retention_days", 7))
     except (TypeError, ValueError):
         config.cache_retention_days = 7
+    config.chat_bridge_enabled = data.get("chat_bridge_enabled", True)
 
     return config
 
@@ -112,6 +114,7 @@ def save_config(config: Config) -> None:
         "sync_retry_delays": config.sync_retry_delays,
         "sync_max_retries": config.sync_max_retries,
         "cache_retention_days": config.cache_retention_days,
+        "chat_bridge_enabled": config.chat_bridge_enabled,
     }
 
     config_path = config.config_path
