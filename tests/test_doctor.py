@@ -12,6 +12,7 @@ def _set_all_checks(
     monkeypatch,
     *,
     python_result=None,
+    session_type_result=None,
     gtk_result=None,
     gstreamer_result=None,
     cairo_result=None,
@@ -25,6 +26,13 @@ def _set_all_checks(
         doctor,
         "check_python_version",
         lambda: python_result or doctor.CheckResult("python version", "ok", ""),
+    )
+    monkeypatch.setattr(
+        doctor,
+        "check_session_type",
+        lambda: (
+            session_type_result or doctor.CheckResult("session type", "ok", "wayland")
+        ),
     )
     monkeypatch.setattr(
         doctor,
@@ -79,7 +87,7 @@ def test_run_doctor_all_pass_returns_zero(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "python version" in captured.out
     assert "gtk4 typelib" in captured.out
-    assert "doctor: 9 checks, 0 failed, 0 warnings" in captured.out
+    assert "doctor: 10 checks, 0 failed, 0 warnings" in captured.out
 
 
 def test_run_doctor_any_fail_returns_one(monkeypatch):
@@ -140,6 +148,43 @@ def test_pipx_missing_fails(monkeypatch):
     result = doctor.check_pipx()
 
     assert result.severity == "fail"
+
+
+def test_session_type_wayland_ok(monkeypatch):
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+
+    result = doctor.check_session_type()
+
+    assert result.severity == "ok"
+    assert "wayland" in result.detail
+
+
+def test_session_type_x11_fails(monkeypatch):
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+
+    result = doctor.check_session_type()
+
+    assert result.severity == "fail"
+    assert "x11" in result.detail.lower()
+    assert "wayland" in result.detail.lower()
+
+
+def test_session_type_unset_warns(monkeypatch):
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
+
+    result = doctor.check_session_type()
+
+    assert result.severity == "warn"
+    assert "XDG_SESSION_TYPE" in result.detail
+
+
+def test_session_type_unknown_warns(monkeypatch):
+    monkeypatch.setenv("XDG_SESSION_TYPE", "tty")
+
+    result = doctor.check_session_type()
+
+    assert result.severity == "warn"
+    assert "tty" in result.detail
 
 
 def test_appindicator_non_gnome_is_ok_not_applicable(monkeypatch):

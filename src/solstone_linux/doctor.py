@@ -78,6 +78,30 @@ def check_cairo() -> CheckResult:
     return CheckResult("cairo binding", "ok", "cairo import ok")
 
 
+def check_session_type() -> CheckResult:
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if session_type == "wayland":
+        return CheckResult("session type", "ok", "wayland")
+    if session_type == "x11":
+        return CheckResult(
+            "session type",
+            "fail",
+            "x11 session; ScreenCast portal needs Wayland "
+            "(KDE's screencast protocol is Wayland-only)",
+        )
+    if not session_type:
+        return CheckResult(
+            "session type",
+            "warn",
+            "XDG_SESSION_TYPE not set; ScreenCast requires a Wayland session",
+        )
+    return CheckResult(
+        "session type",
+        "warn",
+        f"unrecognized session type '{session_type}'; Wayland required",
+    )
+
+
 def check_pipewire() -> CheckResult:
     try:
         result = subprocess.run(
@@ -222,6 +246,7 @@ def check_appindicator_ext() -> CheckResult:
 def run_doctor() -> int:
     checks: list[tuple[str, Callable[[], CheckResult]]] = [
         ("python version", check_python_version),
+        ("session type", check_session_type),
         ("gtk4 typelib", check_gtk4_typelib),
         ("gstreamer", check_gstreamer),
         ("cairo binding", check_cairo),
