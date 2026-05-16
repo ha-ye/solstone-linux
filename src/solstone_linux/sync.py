@@ -293,7 +293,7 @@ class SyncService:
                         )
                         continue
 
-                    self._set_sync_status("retrying", "probing server...")
+                    self._set_sync_status("retrying", "probing journal...")
                     logger.info("Circuit breaker half-open — probing server")
                     today = datetime.now().strftime("%Y%m%d")
                     probe_result = await asyncio.to_thread(

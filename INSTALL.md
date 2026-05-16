@@ -1,6 +1,6 @@
 # installing solstone-linux
 
-these instructions are for a coding agent and human working together. solstone-linux is a standalone observer that experiences your screen and audio along with you on linux desktops using PipeWire and GStreamer, and uploads to a solstone server.
+these instructions are for a coding agent and human working together. solstone-linux is a standalone observer that experiences your screen and audio along with you on linux desktops using PipeWire and GStreamer, and uploads to your solstone journal.
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
@@ -26,10 +26,10 @@ if it's already active and connected, you're done.
 
 ### remote sol
 
-The observer talks to the solstone server over HTTPS — colocation is optional. For remote-sol setups:
+The observer connects to your solstone journal over HTTPS — colocation is optional. For remote-sol setups:
 
 - clone anywhere; the `$(sol root)/observers` path in step 2 only applies when sol is installed locally.
-- `solstone-linux setup` will prompt for the server URL (since local `sol remote list` isn't available) and auto-register the observer with the server via HTTP, persisting the returned key. No manual key handoff is needed if the server's observer-registration endpoint is reachable.
+- `solstone-linux setup` will prompt for the journal URL (since local `sol remote list` isn't available) and auto-register the observer with your journal via HTTP, persisting the returned key. No manual key handoff is needed if the journal's observer-registration endpoint is reachable.
 - otherwise, the install sequence below is the same.
 
 ## install sequence
@@ -60,7 +60,7 @@ The observer talks to the solstone server over HTTPS — colocation is optional.
    ```
    note: package names diverge from Fedora — `typelib-1_0-Gtk-4_0` (not `gtk4`), `gstreamer-plugin-pipewire` (singular), and `alsa-devel` (not `alsa-lib-devel`).
 
-2. If you have local sol, cloning into `$(sol root)/observers` keeps observers colocated with the server. For remote-sol setups, clone anywhere — the observer runs independently of the server at runtime:
+2. If you have local sol, cloning into `$(sol root)/observers` keeps observers colocated with your solstone journal. For remote-sol setups, clone anywhere — the observer runs independently of your journal at runtime:
    ```
    cd "$(sol root)/observers"
    git clone https://github.com/solpbc/solstone-linux.git
@@ -73,7 +73,7 @@ The observer talks to the solstone server over HTTPS — colocation is optional.
    ```
    solstone-linux setup
    ```
-   this prompts for the server URL and auto-registers via `sol` when available.
+   this prompts for the journal URL and auto-registers via `sol` when available.
 
 4. verify the service is running:
    ```
