@@ -64,6 +64,30 @@ make clean          # Remove build artifacts and caches
 make versions       # Show installed package versions
 ```
 
+## Releasing
+
+solstone-linux ships to PyPI via `scripts/release.sh`. The operator runs the
+release from a clean checkout; there is no CI publish path.
+
+```bash
+make release-test   # upload to TestPyPI (requires TESTPYPI_TOKEN)
+make release        # upload to PyPI (requires PYPI_TOKEN)
+```
+
+The script refuses to run on a dirty tree, builds an sdist + a
+`py3-none-any` wheel with `uv build`, runs `uvx twine check`, uploads,
+tags the commit `vX.Y.Z`, pushes the tag, and creates a matching GitHub
+Release with the artifacts attached and the CHANGELOG block as release
+notes.
+
+Before releasing, bump the version in BOTH `pyproject.toml` (`[project].version`)
+and `src/solstone_linux/__init__.py` (`__version__`) — they must match — and add
+a `## [X.Y.Z] - YYYY-MM-DD` block to `CHANGELOG.md`.
+
+Set `RELEASE_DRY_RUN=1` to walk the full flow without uploading, tagging,
+pushing, or publishing a GitHub Release; the build and `twine check` still
+run for real.
+
 ## Development Principles
 
 - **Simple code.** Prefer plain functions over classes. Use dataclasses for structured data. Only use classes when managing stateful lifecycle (Observer, Screencaster, SyncService, AudioRecorder).

@@ -1,7 +1,7 @@
 # solstone-linux Makefile
 # Standalone Linux desktop observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install versions all bootstrap install-service service-restart service-status service-logs uninstall-service
+.PHONY: install test test-only format ci clean clean-install versions all bootstrap install-service service-restart service-status service-logs uninstall-service release release-test
 
 # Default target
 all: install
@@ -157,3 +157,9 @@ versions: .installed
 	@echo ""
 	@echo "=== Installed packages ==="
 	@$(UV) pip list | grep -E "^(pytest|ruff|requests|numpy|soundfile|soundcard|dbus-next|PyGObject)" || true
+
+release: ## Publish solstone-linux to PyPI (production)
+	@bash scripts/release.sh
+
+release-test: ## Publish solstone-linux to TestPyPI
+	@bash scripts/release.sh --test
