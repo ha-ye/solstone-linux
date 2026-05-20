@@ -23,7 +23,13 @@ pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib
 
 ## Install
 
-For a first-time install on this machine:
+solstone (the journal) must already be installed and running on the host this observer reports to. If it isn't, start with the [journal install](https://solstone.app/install).
+
+```bash
+sol observer install --platform linux
+```
+
+### Developers building from source
 
 ```bash
 git clone https://github.com/solpbc/solstone-linux.git

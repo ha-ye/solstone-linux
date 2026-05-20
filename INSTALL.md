@@ -4,7 +4,7 @@ these instructions are for a coding agent and human working together. solstone-l
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
-> **most users should run `sol observer install` from the solstone host instead of following this file by hand.** that one command handles the clone, the system-package preflight, the build, the registration, and the systemd unit — including a `--dry-run` mode to preview every step. the instructions below are for developers building from source or troubleshooting the install.
+> **most users should run `sol observer install` from the solstone host instead of following this file by hand.** that command installs solstone-linux from PyPI by name, runs the system-package preflight, registers the observer, and installs the systemd unit — including a `--dry-run` mode to preview every step. the instructions below are for developers building from source or troubleshooting the install.
 
 ## before you begin
 
@@ -34,6 +34,8 @@ The observer connects to your solstone journal over HTTPS — colocation is opti
 
 ## install sequence
 
+this is the developer/from-source path; most installs should use `sol observer install` from the solstone host.
+
 1. install system dependencies for your distro, including `pipx`. if you need sudo, walk your human through it.
 
    **fedora:**
@@ -60,7 +62,7 @@ The observer connects to your solstone journal over HTTPS — colocation is opti
    ```
    note: package names diverge from Fedora — `typelib-1_0-Gtk-4_0` (not `gtk4`), `gstreamer-plugin-pipewire` (singular), and `alsa-devel` (not `alsa-lib-devel`).
 
-2. If you have local sol, cloning into `$(sol root)/observers` keeps observers colocated with your solstone journal. For remote-sol setups, clone anywhere — the observer runs independently of your journal at runtime:
+2. `sol observer install` does not clone this repo; cloning into `$(sol root)/observers` is only a developer convenience for keeping observer checkouts colocated with a local solstone clone. for remote-sol setups, clone anywhere — the observer runs independently of your journal at runtime:
    ```
    cd "$(sol root)/observers"
    git clone https://github.com/solpbc/solstone-linux.git
