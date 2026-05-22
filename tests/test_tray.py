@@ -37,6 +37,7 @@ def _make_app(tmp_path=None):
     observer._start_mono = time.monotonic()
     observer._sync = None
     observer._dbus_service = None
+    observer.stream_health.return_value = {}
     bus = MagicMock()
     app = TrayApp(observer, bus)
     return app
@@ -118,6 +119,15 @@ class TestUpdateStatus:
 
         assert app.sni._icon_name == ICONS["error"]
 
+    def test_update_status_recording_degraded_icon_when_stream_silent(self):
+        app = _make_app()
+        app._build_menu()
+        app.stream_health = {"HDMI-1": "silent"}
+
+        app._update_status("recording", force=True)
+
+        assert app.sni._icon_name == ICONS["recording-degraded"]
+
 
 class TestUpdateSync:
     def test_update_sync_synced(self):
@@ -135,6 +145,16 @@ class TestUpdateSync:
         app._update_sync("syncing", "3/10 segments")
 
         assert app._sync_item.label == "sync: 3/10 segments"
+
+    def test_update_sync_does_not_clobber_degraded_recording_icon(self):
+        app = _make_app()
+        app._build_menu()
+        app.stream_health = {"HDMI-1": "silent"}
+        app._update_status("recording", force=True)
+
+        app._update_sync("syncing", "3/10 segments")
+
+        assert app.sni._icon_name == ICONS["recording-degraded"]
 
     def test_update_sync_offline(self):
         app = _make_app()
@@ -291,6 +311,17 @@ class TestBuildTooltip:
 
         assert "sync: 2/5" in tooltip
 
+    def test_build_tooltip_prepends_silent_connectors(self):
+        app = _make_app()
+        app.stream_health = {"HDMI-1": "silent", "DP-1": "silent"}
+
+        tooltip = app._build_tooltip()
+
+        assert tooltip.splitlines()[:2] == [
+            "⚠ DP-1 not observed",
+            "⚠ HDMI-1 not observed",
+        ]
+
 
 class TestStatusNotifierItem:
     def test_accessible_desc_properties(self):
@@ -317,6 +348,16 @@ class TestUpdate:
 
         assert app.status == "recording"
         assert app._segment_item.label.startswith(("segment: 4:", "segment: 3:"))
+
+    def test_update_reads_stream_health(self):
+        app = _make_app()
+        app._build_menu()
+        app._observer.stream_health.return_value = {"HDMI-1": "silent"}
+
+        app.update()
+
+        assert app.stream_health == {"HDMI-1": "silent"}
+        assert app.sni._icon_name == ICONS["recording-degraded"]
 
     def test_update_shows_paused(self):
         app = _make_app()

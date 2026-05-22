@@ -3,7 +3,9 @@
 
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from solstone_linux.config import Config
 from solstone_linux.observer import HOST, PLATFORM, Observer
@@ -16,6 +18,7 @@ def _silent_stream() -> SilentStream:
         connector="HDMI-1",
         position="right",
         file_path=Path("/x/right_HDMI-1_screen.webm"),
+        file_frames=0,
         file_bytes=418,
     )
 
@@ -34,6 +37,7 @@ def test_emits_with_full_fields(tmp_path: Path):
     assert kwargs["connector"] == "HDMI-1"
     assert kwargs["position"] == "right"
     assert kwargs["node_id"] == 42
+    assert kwargs["file_frames"] == 0
     assert kwargs["file_bytes"] == 418
     assert kwargs["segment_dir"] == "093014.incomplete"
     assert 118 <= kwargs["duration_seconds"] <= 122
@@ -59,3 +63,21 @@ def test_segment_dir_empty_when_none(tmp_path: Path):
 
     _, kwargs = observer._client.relay_event.call_args
     assert kwargs["segment_dir"] == ""
+
+
+@pytest.mark.asyncio
+async def test_initialize_screencast_emits_no_streams_event(tmp_path: Path):
+    observer = Observer(Config(base_dir=tmp_path))
+    observer._client = MagicMock()
+    observer.screencaster.start = AsyncMock(return_value=[])
+
+    with pytest.raises(RuntimeError, match="No streams available"):
+        await observer.initialize_screencast()
+
+    observer._client.relay_event.assert_called_once_with(
+        "observe",
+        "no_streams",
+        host=HOST,
+        platform=PLATFORM,
+        stream=observer.stream,
+    )

@@ -25,6 +25,7 @@ import os
 import platform
 import signal
 import socket
+import subprocess
 import time
 from pathlib import Path
 
@@ -56,10 +57,16 @@ PLATFORM = platform.system().lower()
 RMS_THRESHOLD = 0.01
 MIN_HITS_FOR_SAVE = 3
 CHUNK_DURATION = 5  # seconds
+MIN_INFLIGHT_WEBM_BYTES = 2048
 
 # Capture modes
 MODE_IDLE = "idle"
 MODE_SCREENCAST = "screencast"
+
+# Screencast stream-liveness escalation
+SILENT_DROP_THRESHOLD = 1
+SILENT_INVALIDATE_THRESHOLD = 3
+SILENT_RESTART_THRESHOLD = 5
 
 # Audio detection retry
 DETECT_RETRIES = 3
@@ -121,6 +128,14 @@ class Observer:
         # D-Bus service interface
         self._dbus_service = None
         self._tray = None
+
+        # Stream liveness and recovery state
+        self.exit_code = 0
+        self._consecutive_silent: dict[str, int] = {}
+        self._all_silent_streak = 0
+        self._notified_silent: set[str] = set()
+        self._recovering: set[str] = set()
+        self._stream_liveness: dict[str, dict[str, int | bool | None]] = {}
 
     async def setup(self) -> bool:
         """Initialize audio devices, DBus connection, and sync service."""
@@ -320,6 +335,7 @@ class Observer:
             healthy, silent = await self.screencaster.stop()
             for s in silent:
                 self._emit_stream_silent(s)
+            self._handle_boundary_stream_health(healthy, silent)
             self.current_streams = []
 
         # Save audio if we have enough threshold hits
@@ -352,6 +368,10 @@ class Observer:
         # Update segment mute state for new segment
         self.segment_is_muted = self.cached_is_muted
 
+        if not self.running:
+            self.current_mode = MODE_IDLE
+            return
+
         # Update mode
         old_mode = self.current_mode
         self.current_mode = new_mode
@@ -381,9 +401,18 @@ class Observer:
 
         if not streams:
             logger.error("No streams returned from screencast start")
+            if self._client is not None:
+                self._client.relay_event(
+                    "observe",
+                    "no_streams",
+                    host=HOST,
+                    platform=PLATFORM,
+                    stream=self.stream,
+                )
             raise RuntimeError("No streams available")
 
         self.current_streams = streams
+        self._reset_stream_liveness(streams)
 
         logger.info(f"Started screencast with {len(streams)} stream(s)")
         for stream in streams:
@@ -402,6 +431,7 @@ class Observer:
             connector=silent.connector,
             position=silent.position,
             node_id=silent.node_id,
+            file_frames=silent.file_frames,
             file_bytes=silent.file_bytes,
             segment_dir=segment_dir_basename,
             duration_seconds=duration_seconds,
@@ -409,6 +439,181 @@ class Observer:
             platform=PLATFORM,
             stream=self.stream,
         )
+
+    def stream_health(self) -> dict[str, str]:
+        """Return connector stream-health states for owner-visible surfaces."""
+        health = {stream.connector: "ok" for stream in self.current_streams}
+        connectors = set(health) | self._notified_silent | self._recovering
+
+        for connector in sorted(connectors):
+            if connector in self._recovering:
+                health[connector] = "recovering"
+            elif (
+                connector in self._notified_silent
+                or self._consecutive_silent.get(connector, 0) >= SILENT_DROP_THRESHOLD
+                or self._stream_liveness.get(connector, {}).get("declared_silent")
+            ):
+                health[connector] = "silent"
+            else:
+                health[connector] = "ok"
+
+        return health
+
+    def _emit_stream_health_changed(self, connector: str, status: str) -> None:
+        if self._dbus_service is not None:
+            self._dbus_service.StreamHealthChanged(connector, status)
+
+    def _notify(self, title: str, body: str) -> None:
+        try:
+            subprocess.Popen(["notify-send", "-a", "sol observer", title, body])
+        except Exception as exc:
+            logger.debug("notify-send failed: %s", exc)
+
+    def _notify_silent_once(self, connector: str, position: str) -> bool:
+        if connector in self._notified_silent:
+            return False
+        self._notify(
+            "sol observer",
+            f"{position} monitor ({connector}) stopped being observed. "
+            "Check display power/cable, or sign in to portal again.",
+        )
+        self._notified_silent.add(connector)
+        return True
+
+    def _notify_recovered(self, connector: str, position: str) -> None:
+        self._notify("sol observer", f"{position} monitor ({connector}) back online.")
+
+    def _reset_stream_liveness(self, streams: list[StreamInfo]) -> None:
+        self._stream_liveness = {
+            stream.connector: {
+                "bytes_at_t60": None,
+                "checked_t60": False,
+                "checked_t120": False,
+                "declared_silent": False,
+            }
+            for stream in streams
+        }
+
+    def _poll_stream_liveness(self) -> None:
+        if self.current_mode != MODE_SCREENCAST or not self.current_streams:
+            return
+
+        snapshot = self.screencaster.liveness_snapshot()
+        elapsed = time.monotonic() - self.start_at_mono
+
+        for stream in self.current_streams:
+            connector = stream.connector
+            state = self._stream_liveness.setdefault(
+                connector,
+                {
+                    "bytes_at_t60": None,
+                    "checked_t60": False,
+                    "checked_t120": False,
+                    "declared_silent": False,
+                },
+            )
+            file_bytes = snapshot.get(connector, 0)
+
+            if elapsed >= 60 and not state["checked_t60"]:
+                state["checked_t60"] = True
+                if file_bytes < MIN_INFLIGHT_WEBM_BYTES:
+                    state["bytes_at_t60"] = file_bytes
+
+            if elapsed < 120 or state["checked_t120"] or state["declared_silent"]:
+                continue
+
+            state["checked_t120"] = True
+            bytes_at_t60 = state["bytes_at_t60"]
+            if (
+                bytes_at_t60 is not None
+                and bytes_at_t60 < MIN_INFLIGHT_WEBM_BYTES
+                and file_bytes < MIN_INFLIGHT_WEBM_BYTES
+            ):
+                state["declared_silent"] = True
+                logger.warning(
+                    "mid-segment silent stream: connector=%s position=%s file_bytes=%d path=%s",
+                    connector,
+                    stream.position,
+                    file_bytes,
+                    stream.file_path,
+                )
+                if self._dbus_service:
+                    self._dbus_service.ErrorOccurred(
+                        f"stream silent: {stream.position} ({connector})"
+                    )
+                self._emit_stream_health_changed(connector, "silent")
+                self._notify_silent_once(connector, stream.position)
+                self._refresh_tray()
+
+    def _handle_boundary_stream_health(
+        self,
+        healthy: list[StreamInfo],
+        silent: list[SilentStream],
+    ) -> None:
+        refresh_tray = False
+
+        for stream in healthy:
+            connector = stream.connector
+            was_notified = connector in self._notified_silent
+            self._consecutive_silent[connector] = 0
+            if connector in self._stream_liveness:
+                self._stream_liveness[connector]["declared_silent"] = False
+            if was_notified:
+                self._emit_stream_health_changed(connector, "ok")
+                self._notified_silent.discard(connector)
+                self._recovering.discard(connector)
+                self._notify_recovered(connector, stream.position)
+                refresh_tray = True
+
+        for stream in silent:
+            connector = stream.connector
+            count = self._consecutive_silent.get(connector, 0) + 1
+            self._consecutive_silent[connector] = count
+
+            if connector not in self._notified_silent:
+                self._emit_stream_health_changed(connector, "silent")
+                self._notify_silent_once(connector, stream.position)
+                refresh_tray = True
+
+            restore_token_path = self.config.restore_token_path
+            if count >= SILENT_INVALIDATE_THRESHOLD and restore_token_path.exists():
+                logger.warning(
+                    "invalidating restore_token after %d consecutive silent segments on %s",
+                    count,
+                    connector,
+                )
+                try:
+                    restore_token_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "could not invalidate restore_token %s: %s",
+                        restore_token_path,
+                        exc,
+                    )
+                self._consecutive_silent[connector] = 0
+                self._recovering.add(connector)
+                self._emit_stream_health_changed(connector, "recovering")
+                self._notify(
+                    "sol observer",
+                    "sol observer reconfiguring screen access — you may see a permission prompt.",
+                )
+                refresh_tray = True
+
+        if silent and not healthy:
+            self._all_silent_streak += 1
+        else:
+            self._all_silent_streak = 0
+
+        if self._all_silent_streak >= SILENT_RESTART_THRESHOLD:
+            logger.error(
+                "all streams silent for %d consecutive segments — exiting for systemd restart",
+                self._all_silent_streak,
+            )
+            self.exit_code = 75
+            self.running = False
+
+        if refresh_tray:
+            self._refresh_tray()
 
     def emit_status(self):
         """Emit observe.status event with current state (fire-and-forget)."""
@@ -611,6 +816,9 @@ class Observer:
                     self.emit_status()
                     continue
 
+                if self.current_mode == MODE_SCREENCAST and self.current_streams:
+                    self._poll_stream_liveness()
+
                 # Check activity status and determine new mode
                 try:
                     new_mode = await self.check_activity_status()
@@ -684,6 +892,8 @@ class Observer:
                         f"hits={self.threshold_hits}/{MIN_HITS_FOR_SAVE}"
                     )
                     await self.handle_boundary(new_mode)
+                    if not self.running:
+                        continue
                     if mode_changed and self._dbus_service:
                         status = "recording" if new_mode == MODE_SCREENCAST else "idle"
                         self._dbus_service.StatusChanged(status)
@@ -781,4 +991,4 @@ async def async_run(config: Config) -> int:
         logger.error(f"Observer error: {e}", exc_info=True)
         return 1
 
-    return 0
+    return observer.exit_code

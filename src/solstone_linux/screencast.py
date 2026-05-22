@@ -51,7 +51,8 @@ SC_IFACE = "org.freedesktop.portal.ScreenCast"
 REQ_IFACE = "org.freedesktop.portal.Request"
 SESSION_IFACE = "org.freedesktop.portal.Session"
 
-MIN_HEALTHY_WEBM_BYTES = 2048
+MIN_HEALTHY_WEBM_FRAMES = 30
+_ffprobe_missing_logged = False
 
 
 @dataclass
@@ -79,7 +80,55 @@ class SilentStream:
     connector: str
     position: str
     file_path: Path
+    file_frames: int
     file_bytes: int
+
+
+def _count_video_frames(path: Path) -> int:
+    """Count frames in a completed WebM file via ffprobe."""
+    global _ffprobe_missing_logged
+
+    if not path.exists():
+        return 0
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                str(path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError as exc:
+        if not _ffprobe_missing_logged:
+            logger.warning(
+                "ffprobe not found; cannot verify webm frame counts: %s",
+                exc,
+            )
+            _ffprobe_missing_logged = True
+        return 0
+    except Exception:
+        return 0
+
+    if result.returncode != 0:
+        return 0
+
+    try:
+        return int(result.stdout.strip())
+    except (TypeError, ValueError):
+        return 0
 
 
 def _load_restore_token(token_path: Path) -> str | None:
@@ -543,7 +592,8 @@ class Screencaster:
                 logger.warning("could not stat %s: %s", file_path, exc)
                 file_bytes = 0
 
-            if file_bytes >= MIN_HEALTHY_WEBM_BYTES:
+            file_frames = _count_video_frames(file_path)
+            if file_frames >= MIN_HEALTHY_WEBM_FRAMES:
                 healthy.append(stream)
                 continue
 
@@ -553,13 +603,15 @@ class Screencaster:
                     connector=stream.connector,
                     position=stream.position,
                     file_path=file_path,
+                    file_frames=file_frames,
                     file_bytes=file_bytes,
                 )
             )
             logger.warning(
-                "silent stream dropped: connector=%s position=%s file_bytes=%d path=%s",
+                "silent stream dropped: connector=%s position=%s file_frames=%d file_bytes=%d path=%s",
                 stream.connector,
                 stream.position,
+                file_frames,
                 file_bytes,
                 file_path,
             )
@@ -583,6 +635,17 @@ class Screencaster:
         self._started = False
 
         return healthy, silent
+
+    def liveness_snapshot(self) -> dict[str, int]:
+        """Return current output byte size per connector without touching capture."""
+        snapshot: dict[str, int] = {}
+        for stream in self.streams:
+            file_path = Path(stream.file_path)
+            try:
+                snapshot[stream.connector] = file_path.stat().st_size
+            except (FileNotFoundError, OSError):
+                snapshot[stream.connector] = 0
+        return snapshot
 
     async def _close_session(self):
         """Close the portal session."""
