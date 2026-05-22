@@ -89,6 +89,13 @@ fi
 TWINE_USERNAME=__token__ TWINE_PASSWORD="$TOKEN" \
   "${RUN[@]}" uvx twine upload "${REPOSITORY_ARGS[@]}" dist/*
 
+# Tag + GitHub release only for production. A TestPyPI dry-run should not leave
+# a git tag or a public release behind.
+if [[ "$TARGET" != "PyPI" ]]; then
+  echo "skipping git tag + GitHub release (TestPyPI run)"
+  exit 0
+fi
+
 TAG="v${VERSION}"
 "${RUN[@]}" git tag -a "$TAG" -m "solstone-linux ${VERSION}"
 if ! "${RUN[@]}" git push origin "$TAG"; then
