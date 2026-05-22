@@ -11,8 +11,6 @@ ExecStart={BINARY} run
 PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP
 Environment=PATH={PATH}
 Restart=on-failure
-# Stream-liveness escalation exits 75 to force a fresh portal session.
-RestartForceExitStatus=75
 RestartSec=10
 
 [Install]

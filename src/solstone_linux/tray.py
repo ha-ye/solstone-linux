@@ -30,7 +30,6 @@ ICONS = {
     "stopped": "solstone-error",
     "syncing": "solstone-syncing",
     "error": "solstone-error",
-    "recording-degraded": "solstone-recording-degraded",
 }
 
 # Agent instructions template copied to clipboard
@@ -83,7 +82,6 @@ class TrayApp:
         self.sync_status = "synced"
         self.sync_progress = ""
         self.error = ""
-        self.stream_health: dict[str, str] = {}
         self.paused_remaining = 0
         self.stats = {}
         self._last_stats_time = 0.0
@@ -167,10 +165,6 @@ class TrayApp:
             sync_status = obs._sync.sync_status
             sync_progress = obs._sync.sync_progress
 
-        stream_health = obs.stream_health()
-        health_changed = stream_health != self.stream_health
-        self.stream_health = stream_health
-
         # Segment timer
         if obs._paused or obs.segment_dir is None:
             segment_timer = 0
@@ -230,7 +224,7 @@ class TrayApp:
                 "uptime_seconds": uptime_seconds,
             }
 
-        self._update_status(status, force=health_changed)
+        self._update_status(status)
         self._update_sync(sync_status, sync_progress)
         self._update_header(pause_remaining)
         self._update_live_stats(segment_timer, pause_remaining)
@@ -364,25 +358,19 @@ class TrayApp:
             ]
         )
 
-    def _has_silent_stream(self) -> bool:
-        return any(status == "silent" for status in self.stream_health.values())
-
-    def _select_icon(self) -> str:
-        if self.error:
-            return ICONS["error"]
-        if self.status == "recording" and self._has_silent_stream():
-            return ICONS["recording-degraded"]
-        if self.sync_status in ("syncing", "uploading", "retrying"):
-            return ICONS["syncing"]
-        return ICONS.get(self.status, ICONS["recording"])
-
-    def _update_status(self, status: str, force: bool = False):
+    def _update_status(self, status: str):
         """Update tray icon and menu for observer status."""
-        if status == self.status and not force:
+        if status == self.status:
             return
         self.status = status
 
-        icon = self._select_icon()
+        # Pick icon
+        if self.error:
+            icon = ICONS["error"]
+        elif self.sync_status in ("syncing", "uploading", "retrying"):
+            icon = ICONS["syncing"]
+        else:
+            icon = ICONS.get(status, ICONS["recording"])
         self.sni.set_icon(icon)
 
         # Update tooltip
@@ -435,7 +423,10 @@ class TrayApp:
 
         # Update icon — syncing state gets the half icon
         if not self.error:
-            self.sni.set_icon(self._select_icon())
+            if sync_status in ("syncing", "uploading", "retrying"):
+                self.sni.set_icon(ICONS["syncing"])
+            else:
+                self.sni.set_icon(ICONS.get(self.status, ICONS["recording"]))
 
         self.sni.set_tooltip("solstone observer", self._build_tooltip())
         self._update_accessible_descriptions()
@@ -481,14 +472,6 @@ class TrayApp:
         """Build plain-text tooltip body (cross-DE compatible)."""
         parts = []
 
-        silent_connectors = sorted(
-            connector
-            for connector, status in self.stream_health.items()
-            if status == "silent"
-        )
-        for connector in silent_connectors:
-            parts.append(f"⚠ {connector} not observed")
-
         status_labels = {
             "recording": "observing",
             "paused": "paused",
@@ -512,8 +495,6 @@ class TrayApp:
     def _update_accessible_descriptions(self):
         if self.error:
             desc = "Solstone observer — error"
-        elif self.status == "recording" and self._has_silent_stream():
-            desc = "Solstone observer — recording degraded"
         elif self.sync_status in ("syncing", "uploading", "retrying"):
             desc = "Solstone observer — syncing"
         elif self.status == "paused":

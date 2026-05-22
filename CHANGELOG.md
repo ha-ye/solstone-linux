@@ -4,13 +4,6 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
-## Unreleased
-
-- Added frame-count silent-stream detection, in-flight stream liveness checks,
-  per-connector recovery escalation, D-Bus `StreamHealth`, and a tray
-  degradation glyph so a silent HDMI stream cannot go unnoticed like the
-  82-hour right-HDMI incident.
-
 ## [0.1.0] - 2026-05-19
 
 First public release of solstone-linux — the Linux desktop observer

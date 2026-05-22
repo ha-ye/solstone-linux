@@ -82,10 +82,6 @@ class ObserverService(ServiceInterface):
     def SegmentInterval(self) -> "i":
         return self._observer.interval
 
-    @dbus_property(access=PropertyAccess.READ)
-    def StreamHealth(self) -> "a{ss}":
-        return self._observer.stream_health()
-
     @method()
     def Pause(self, duration_seconds: "i") -> "s":
         self._observer.pause(duration_seconds)
@@ -151,7 +147,3 @@ class ObserverService(ServiceInterface):
     @dbus_signal()
     def ErrorOccurred(self, message) -> "s":
         return message
-
-    @dbus_signal()
-    def StreamHealthChanged(self, connector, status) -> "ss":
-        return [connector, status]
