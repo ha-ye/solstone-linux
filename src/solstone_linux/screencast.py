@@ -51,6 +51,8 @@ SC_IFACE = "org.freedesktop.portal.ScreenCast"
 REQ_IFACE = "org.freedesktop.portal.Request"
 SESSION_IFACE = "org.freedesktop.portal.Session"
 
+MIN_HEALTHY_WEBM_BYTES = 2048
+
 
 @dataclass
 class StreamInfo:
@@ -69,6 +71,15 @@ class StreamInfo:
     def filename(self) -> str:
         """Return just the filename for event payloads."""
         return os.path.basename(self.file_path)
+
+
+@dataclass
+class SilentStream:
+    node_id: int
+    connector: str
+    position: str
+    file_path: Path
+    file_bytes: int
 
 
 def _load_restore_token(token_path: Path) -> str | None:
@@ -493,12 +504,12 @@ class Screencaster:
         self._started = True
         return self.streams
 
-    async def stop(self) -> list[StreamInfo]:
+    async def stop(self) -> tuple[list[StreamInfo], list[SilentStream]]:
         """
         Stop screencast recording gracefully.
 
         Returns:
-            List of StreamInfo with file_path for the recorded files.
+            Healthy streams and silent streams that were dropped.
         """
         streams = self.streams.copy()
 
@@ -520,6 +531,43 @@ class Screencaster:
 
         self.gst_process = None
 
+        healthy: list[StreamInfo] = []
+        silent: list[SilentStream] = []
+        for stream in streams:
+            file_path = Path(stream.file_path)
+            try:
+                file_bytes = file_path.stat().st_size
+            except FileNotFoundError:
+                file_bytes = 0
+            except OSError as exc:
+                logger.warning("could not stat %s: %s", file_path, exc)
+                file_bytes = 0
+
+            if file_bytes >= MIN_HEALTHY_WEBM_BYTES:
+                healthy.append(stream)
+                continue
+
+            silent.append(
+                SilentStream(
+                    node_id=stream.node_id,
+                    connector=stream.connector,
+                    position=stream.position,
+                    file_path=file_path,
+                    file_bytes=file_bytes,
+                )
+            )
+            logger.warning(
+                "silent stream dropped: connector=%s position=%s file_bytes=%d path=%s",
+                stream.connector,
+                stream.position,
+                file_bytes,
+                file_path,
+            )
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("could not unlink silent stream %s: %s", file_path, exc)
+
         # Close PipeWire fd
         if self.pw_fd is not None:
             try:
@@ -534,7 +582,7 @@ class Screencaster:
         self.streams = []
         self._started = False
 
-        return streams
+        return healthy, silent
 
     async def _close_session(self):
         """Close the portal session."""

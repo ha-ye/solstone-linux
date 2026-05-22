@@ -42,7 +42,7 @@ from .audio_recorder import AudioRecorder
 from .chat_bridge import run_chat_bridge
 from .config import Config
 from .recovery import write_segment_metadata
-from .screencast import Screencaster, StreamInfo
+from .screencast import Screencaster, SilentStream, StreamInfo
 from .sync import SyncService
 from .upload import UploadClient
 
@@ -317,7 +317,9 @@ class Observer:
         # Stop screencast first (closes file handles)
         if self.current_mode == MODE_SCREENCAST:
             logger.info("Stopping previous screencast")
-            await self.screencaster.stop()
+            healthy, silent = await self.screencaster.stop()
+            for s in silent:
+                self._emit_stream_silent(s)
             self.current_streams = []
 
         # Save audio if we have enough threshold hits
@@ -388,6 +390,25 @@ class Observer:
             logger.info(f"  {stream.position} ({stream.connector}): {stream.file_path}")
 
         return True
+
+    def _emit_stream_silent(self, silent: SilentStream) -> None:
+        if self._client is None:
+            return
+        segment_dir_basename = self.segment_dir.name if self.segment_dir else ""
+        duration_seconds = int(time.time() - self.start_at) if self.start_at else 0
+        self._client.relay_event(
+            "observe",
+            "stream_silent",
+            connector=silent.connector,
+            position=silent.position,
+            node_id=silent.node_id,
+            file_bytes=silent.file_bytes,
+            segment_dir=segment_dir_basename,
+            duration_seconds=duration_seconds,
+            host=HOST,
+            platform=PLATFORM,
+            stream=self.stream,
+        )
 
     def emit_status(self):
         """Emit observe.status event with current state (fire-and-forget)."""
@@ -551,7 +572,9 @@ class Observer:
                 if self._paused:
                     if self.segment_dir:
                         if self.current_mode == MODE_SCREENCAST:
-                            await self.screencaster.stop()
+                            healthy, silent = await self.screencaster.stop()
+                            for s in silent:
+                                self._emit_stream_silent(s)
                             self.current_streams = []
                         if self.threshold_hits >= MIN_HITS_FOR_SAVE:
                             self._save_audio_segment(
@@ -603,7 +626,9 @@ class Observer:
                     and not self.screencaster.is_healthy()
                 ):
                     logger.warning("Screencast recording failed, stopping gracefully")
-                    await self.screencaster.stop()
+                    healthy, silent = await self.screencaster.stop()
+                    for s in silent:
+                        self._emit_stream_silent(s)
                     self.current_streams = []
                     self.current_mode = MODE_IDLE
 
@@ -692,7 +717,9 @@ class Observer:
         # Stop screencast first (closes file handles)
         if self.current_mode == MODE_SCREENCAST:
             logger.info("Stopping screencast for shutdown")
-            await self.screencaster.stop()
+            healthy, silent = await self.screencaster.stop()
+            for s in silent:
+                self._emit_stream_silent(s)
             await asyncio.sleep(0.5)
 
         # Save final audio if threshold met
