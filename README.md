@@ -25,9 +25,15 @@ pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib
 
 solstone (the journal) must already be installed and running on the host this observer reports to. If it isn't, start with the [journal install](https://solstone.app/install).
 
+On the machine that will host the observer:
+
 ```bash
-sol observer install --platform linux
+pipx install solstone-linux
+solstone-linux install-service
+solstone-linux setup
 ```
+
+`setup` prompts for your journal URL and registers the observer for you. If this machine can't reach your solstone host directly, mint a key from there with `sol observer create <name>` and paste it during setup.
 
 ### Developers building from source
 
