@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from solstone_linux import cli as cli_module
@@ -13,6 +14,15 @@ from solstone_linux.config import Config
 
 def _args() -> argparse.Namespace:
     return argparse.Namespace()
+
+
+_BINARY = "/home/user/.local/pipx/venvs/solstone-linux/bin/solstone-linux"
+_EXPECTED_SVGS = {
+    "solstone-error.svg",
+    "solstone-paused.svg",
+    "solstone-recording.svg",
+    "solstone-syncing.svg",
+}
 
 
 _REAL_IS_DIR = Path.is_dir
@@ -117,6 +127,115 @@ def test_cmd_install_service_always_rewrites(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert "nothing to do" not in captured.out.lower()
     assert run_mock.call_count == 8
+
+
+def test_cmd_install_service_installs_svgs_without_index_theme(tmp_path: Path):
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    status = hicolor / "scalable/status"
+
+    assert {path.name for path in status.glob("*.svg")} == _EXPECTED_SVGS
+    assert not (hicolor / "index.theme").exists()
+
+
+def test_cmd_install_service_removes_stale_solstone_index_theme(tmp_path: Path):
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    hicolor.mkdir(parents=True)
+    (hicolor / "index.theme").write_text(
+        "[Icon Theme]\nName=solstone\nInherits=hicolor\nDirectories=scalable/status\n"
+    )
+
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+
+    assert not (hicolor / "index.theme").exists()
+
+
+def test_cmd_install_service_keeps_foreign_index_theme(tmp_path: Path):
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    hicolor.mkdir(parents=True)
+    index = hicolor / "index.theme"
+    content = "[Icon Theme]\nName=MyTheme\nName=solstone-custom\n"
+    index.write_text(content)
+
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+
+    assert index.exists()
+    assert index.read_text() == content
+
+
+def test_cmd_install_service_reports_unreadable_index_theme(
+    tmp_path: Path,
+    capsys,
+):
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    hicolor.mkdir(parents=True)
+    index = hicolor / "index.theme"
+    index.write_bytes(b"\xff\xfe\x00not utf8")
+
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+
+    captured = capsys.readouterr()
+    warning_lines = [
+        line
+        for line in captured.out.splitlines()
+        if "Left existing icon theme index in place" in line
+    ]
+
+    assert index.exists()
+    assert len(warning_lines) == 1
+    assert str(index) in warning_lines[0]
+
+
+def test_cmd_install_service_icon_step_idempotent(tmp_path: Path):
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+                assert cmd_install_service(_args()) == 0
+
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    status = hicolor / "scalable/status"
+
+    assert {path.name for path in status.glob("*.svg")} == _EXPECTED_SVGS
+    assert not (hicolor / "index.theme").exists()
+
+
+def test_cmd_install_service_survives_missing_gtk_update_icon_cache(tmp_path: Path):
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch(
+                "solstone_linux.cli.subprocess.run",
+                side_effect=FileNotFoundError,
+            ):
+                assert cmd_install_service(_args()) == 0
+
+    hicolor = tmp_path / ".local/share/icons/hicolor"
+    status = hicolor / "scalable/status"
+
+    assert {path.name for path in status.glob("*.svg")} == _EXPECTED_SVGS
+    assert not (hicolor / "index.theme").exists()
+
+
+def test_cmd_install_service_survives_nonzero_gtk_update_icon_cache(tmp_path: Path):
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run") as run_mock:
+                run_mock.return_value = MagicMock(returncode=1)
+
+                assert cmd_install_service(_args()) == 0
 
 
 def test_cmd_setup_non_interactive_happy_path(tmp_path: Path):

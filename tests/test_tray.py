@@ -18,6 +18,7 @@ from solstone_linux.tray import (
     SOURCE_DIR,
     TrayApp,
     _compute_header_label,
+    resolve_icon_theme_path,
 )
 
 
@@ -40,6 +41,26 @@ def _make_app(tmp_path=None):
     bus = MagicMock()
     app = TrayApp(observer, bus)
     return app
+
+
+class TestResolveIconThemePath:
+    def test_resolve_icon_theme_path_prefers_installed(self, tmp_path):
+        installed_icon = (
+            tmp_path
+            / ".local/share/icons/hicolor/scalable/status/solstone-recording.svg"
+        )
+        installed_icon.parent.mkdir(parents=True)
+        installed_icon.touch()
+
+        with patch("solstone_linux.tray.Path.home", return_value=tmp_path):
+            assert resolve_icon_theme_path() == str(tmp_path / ".local/share/icons")
+
+    def test_resolve_icon_theme_path_contrib_fallback(self, tmp_path):
+        with patch("solstone_linux.tray.Path.home", return_value=tmp_path):
+            result = resolve_icon_theme_path()
+
+        assert result.endswith("contrib/icons")
+        assert (Path(result) / "hicolor").is_dir() is True
 
 
 class TestTrayInit:

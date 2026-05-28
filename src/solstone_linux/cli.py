@@ -321,15 +321,31 @@ def cmd_install_service(args: argparse.Namespace) -> int:
                 shutil.copy2(svg, status_dir / svg.name)
                 print(f"Installed {status_dir / svg.name}")
 
-        # Copy index.theme only if one doesn't already exist
-        index_dest = icon_dest / "index.theme"
-        if not index_dest.exists():
-            shutil.copy2(icon_source / "index.theme", index_dest)
-            print(f"Wrote {index_dest}")
+        # Self-heal: earlier installs copied a solstone index.theme into this
+        # shared hicolor dir. Because the user icon dir out-ranks
+        # /usr/share/icons, that file shadowed the system hicolor index (which
+        # declares ~649 dirs) with one that declared only scalable/status, so
+        # every unrelated app-icon lookup fell back to hicolor, missed, and
+        # rendered as our diamond. Remove only our own file — matched on the
+        # exact "Name=solstone" line — and never touch a foreign index.theme.
+        legacy_index = icon_dest / "index.theme"
+        if legacy_index.exists():
+            try:
+                content = legacy_index.read_text()
+            except (OSError, UnicodeDecodeError):
+                print(f"Left existing icon theme index in place: {legacy_index}")
+            else:
+                if "Name=solstone" in content.splitlines():
+                    legacy_index.unlink()
+                    print(f"Removed stale solstone icon theme index: {legacy_index}")
 
-        # Update icon cache (non-fatal)
+        # Refresh the icon cache (non-fatal). --ignore-theme-index keeps it
+        # quiet now that this dir ships no index.theme of its own.
         try:
-            subprocess.run(["gtk-update-icon-cache", str(icon_dest)], check=False)
+            subprocess.run(
+                ["gtk-update-icon-cache", "--ignore-theme-index", str(icon_dest)],
+                check=False,
+            )
         except FileNotFoundError:
             pass
 

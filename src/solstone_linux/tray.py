@@ -67,6 +67,25 @@ def _compute_header_label(status, sync_status, pause_remaining) -> str:
     return str(status)
 
 
+def resolve_icon_theme_path() -> str:
+    """Return the SNI icon-theme search path, or '' if none is available.
+
+    Prefers the installed location, then the in-repo contrib dir for
+    development. No index.theme is needed: the SNI host merges this path
+    against the system hicolor theme, which already declares scalable/status.
+    """
+    installed_icon = (
+        Path.home()
+        / ".local/share/icons/hicolor/scalable/status/solstone-recording.svg"
+    )
+    if installed_icon.exists():
+        return str(Path.home() / ".local/share/icons")
+    contrib = Path(__file__).resolve().parent.parent.parent / "contrib" / "icons"
+    if (contrib / "hicolor").is_dir():
+        return str(contrib)
+    return ""
+
+
 class TrayApp:
     """In-process tray component — exports SNI on the observer's bus."""
 
@@ -107,18 +126,7 @@ class TrayApp:
         self.bus.export("/MenuBar", self.menu)
 
         # Resolve icon theme: installed location, then dev/contrib fallback
-        installed_icon = (
-            Path.home()
-            / ".local/share/icons/hicolor/scalable/status/solstone-recording.svg"
-        )
-        if installed_icon.exists():
-            self.sni._icon_theme_path = str(Path.home() / ".local/share/icons")
-        else:
-            contrib = (
-                Path(__file__).resolve().parent.parent.parent / "contrib" / "icons"
-            )
-            if (contrib / "hicolor").is_dir():
-                self.sni._icon_theme_path = str(contrib)
+        self.sni._icon_theme_path = resolve_icon_theme_path()
         if self.sni._icon_theme_path:
             log.info(f"Icon theme path: {self.sni._icon_theme_path}")
 
