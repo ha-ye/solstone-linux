@@ -40,12 +40,12 @@ this is the developer/from-source path; most installs should use the `pipx insta
 
    **fedora:**
    ```
-   sudo dnf install python3-gobject gtk4 gstreamer1-plugins-base gstreamer1-plugin-pipewire pipewire-gstreamer alsa-lib-devel pulseaudio-utils pipewire-pulseaudio xdg-desktop-portal pipx
+   sudo dnf install python3-gobject python3-cairo gtk4 gstreamer1-plugins-base pipewire-gstreamer alsa-lib-devel pulseaudio-utils pipewire-pulseaudio xdg-desktop-portal pipx gcc python3-devel pkgconf-pkg-config cairo-devel cairo-gobject-devel
    ```
 
    **debian / ubuntu:**
    ```
-   sudo apt install python3-gi gir1.2-gdk-4.0 gir1.2-gtk-4.0 gstreamer1.0-pipewire libasound2-dev pulseaudio-utils pipewire-pulse xdg-desktop-portal pipx
+   sudo apt install python3-gi python3-cairo gir1.2-gtk-4.0 gstreamer1.0-pipewire libasound2-dev pulseaudio-utils pipewire-pulse xdg-desktop-portal pipx gcc python3-dev pkg-config libcairo2-dev
    ```
 
    **arch:**
@@ -61,6 +61,10 @@ this is the developer/from-source path; most installs should use the `pipx insta
      xdg-desktop-portal python3-pipx
    ```
    note: package names diverge from Fedora — `typelib-1_0-Gtk-4_0` (not `gtk4`), `gstreamer-plugin-pipewire` (singular), and `alsa-devel` (not `alsa-lib-devel`).
+
+   the `cairo` headers + `gcc` + Python dev headers in the Fedora/Debian lines above are there because `pycairo` builds from source during install; without them the install fails with a compile error before you'd reach the Troubleshooting section. they're the same fixes listed under Troubleshooting, hoisted up so a fresh install works in one shot.
+
+   `uv` / `pipx`: Fedora packages both (`sudo dnf install uv pipx`); Debian/Ubuntu package `pipx` but not `uv`. the PyPI install flow only needs `pipx` — `uv` is optional and used by the from-source dev workflow in the Makefile.
 
 2. cloning into `$(sol root)/observers` is only a developer convenience for keeping observer checkouts colocated with a local solstone clone. for remote-sol setups, clone anywhere — the observer runs independently of your journal at runtime:
    ```
