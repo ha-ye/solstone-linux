@@ -4,6 +4,51 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.1.1] - 2026-06-02
+
+A focused maintenance release: two reliability fixes and a round of
+install-instruction corrections from fresh-machine testing on Fedora,
+Debian, and openSUSE.
+
+### Fixed
+
+- **Idle monitors no longer silently drop observations.** When a monitor
+  produced no frames during a segment (a static screen with nothing
+  changing on it), GStreamer still wrote a header-only WebM file. Those
+  empty files were finalized, uploaded, and then failed to process in your
+  journal — so that monitor's segment was lost without any signal. The
+  observer now drops these empty recordings at the source and emits an
+  `observe.stream_silent` event (logged at WARNING) so the gap is visible
+  instead of silent.
+- **Install no longer clobbers your system icon theme.** On GNOME,
+  `install-service` was writing a stray `index.theme` into the shared
+  hicolor icon directory, which shadowed the system index and caused
+  unrelated app icons to render as the solstone diamond. The installer now
+  drops only the solstone status icons (the system index already declares
+  their directory) and self-heals any previously broken install on the next
+  `install-service` run. A foreign or unreadable `index.theme` is left
+  untouched.
+
+### Documentation
+
+- Corrected the Fedora and Debian system-dependency lines after fresh-box
+  install testing: dropped packages that do not exist in their repos
+  (`gstreamer1-plugin-pipewire` on Fedora, `gir1.2-gdk-4.0` on Debian) and
+  hoisted the cairo / pycairo build toolchain onto the main install line so
+  a fresh install succeeds in one shot. Added `gstreamer1.0-tools` to the
+  Debian line — `gst-launch-1.0` is required for screen recording and is
+  not pulled in transitively.
+- Added a verified openSUSE dependency block and mirrored the corrected
+  dependency lists between `README.md` and `INSTALL.md`.
+- Updated the install path to lead with `pipx install solstone-linux`, then
+  `solstone-linux install-service`, then `solstone-linux setup`.
+
+### Internal
+
+- The release script now tags the commit and cuts a GitHub release only on
+  a production PyPI run; a TestPyPI run no longer leaves a tag or public
+  release behind.
+
 ## [0.1.0] - 2026-05-19
 
 First public release of solstone-linux — the Linux desktop observer
