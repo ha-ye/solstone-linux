@@ -269,6 +269,10 @@ class TestIsScreenLocked:
 class TestIsPowerSaveActive:
     """Test power save fallback order."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_warning_cache(self):
+        activity._POWER_SAVE_WARNED_BACKENDS.clear()
+
     @pytest.mark.asyncio
     async def test_gnome_backend_nonzero_mode_returns_true(self):
         bus = MagicMock()
@@ -420,6 +424,37 @@ class TestIsPowerSaveActive:
             "service=org.kde.Solid.PowerManagement "
             "path=/org/kde/Solid/PowerManagement: DBusError: broke",
         ]
+
+    @pytest.mark.asyncio
+    async def test_is_power_save_active_repeated_backend_failures_log_debug_after_first(
+        self, caplog
+    ):
+        bus = MagicMock()
+        bus.introspect = AsyncMock(side_effect=[_no_reply("broke")] * 4)
+
+        with caplog.at_level(logging.DEBUG):
+            assert await activity.is_power_save_active(bus) is False
+            assert await activity.is_power_save_active(bus) is False
+
+        warnings = [
+            record.message
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        ]
+        debug = [
+            record.message
+            for record in caplog.records
+            if record.levelno == logging.DEBUG
+        ]
+        assert warnings == [
+            "is_power_save_active Mutter backend failed: "
+            "service=org.gnome.Mutter.DisplayConfig "
+            "path=/org/gnome/Mutter/DisplayConfig: DBusError: broke",
+            "is_power_save_active KDE backend failed: "
+            "service=org.kde.Solid.PowerManagement "
+            "path=/org/kde/Solid/PowerManagement: DBusError: broke",
+        ]
+        assert debug == warnings
 
 
 class TestProbeActivityServices:

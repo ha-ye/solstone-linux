@@ -24,6 +24,7 @@ from dbus_next.errors import (
 logger = logging.getLogger(__name__)
 
 _DBUS_PROBE_TIMEOUT_SEC = 2.0
+_POWER_SAVE_WARNED_BACKENDS: set[str] = set()
 
 _SERVICE_MISSING_ERRORS = (
     "org.freedesktop.DBus.Error.ServiceUnknown",
@@ -212,6 +213,22 @@ async def is_power_save_active(bus: MessageBus) -> bool:
 
     Returns True if power save is active, False otherwise.
     """
+
+    def log_backend_failure_once(backend: str, bus_name: str, path: str, exc) -> None:
+        level = logger.warning
+        if backend in _POWER_SAVE_WARNED_BACKENDS:
+            level = logger.debug
+        else:
+            _POWER_SAVE_WARNED_BACKENDS.add(backend)
+        level(
+            "is_power_save_active %s backend failed: service=%s path=%s: %s: %s",
+            backend,
+            bus_name,
+            path,
+            type(exc).__name__,
+            exc,
+        )
+
     # Try GNOME Mutter DisplayConfig first
     try:
         intro = await bus.introspect(DISPLAY_CONFIG_BUS, DISPLAY_CONFIG_PATH)
@@ -227,11 +244,10 @@ async def is_power_save_active(bus: MessageBus) -> bool:
         OSError,
     ) as exc:
         if not _is_service_missing(exc):
-            logger.warning(
-                "is_power_save_active Mutter backend failed: service=%s path=%s: %s: %s",
+            log_backend_failure_once(
+                "Mutter",
                 DISPLAY_CONFIG_BUS,
                 DISPLAY_CONFIG_PATH,
-                type(exc).__name__,
                 exc,
             )
 
@@ -248,13 +264,7 @@ async def is_power_save_active(bus: MessageBus) -> bool:
         OSError,
     ) as exc:
         if not _is_service_missing(exc):
-            logger.warning(
-                "is_power_save_active KDE backend failed: service=%s path=%s: %s: %s",
-                KDE_POWER_BUS,
-                KDE_POWER_PATH,
-                type(exc).__name__,
-                exc,
-            )
+            log_backend_failure_once("KDE", KDE_POWER_BUS, KDE_POWER_PATH, exc)
         return False
 
 
