@@ -42,11 +42,35 @@ from .audio_recorder import AudioRecorder
 from .chat_bridge import run_chat_bridge
 from .config import Config
 from .recovery import write_segment_metadata
-from .screencast import Screencaster, SilentStream, StreamInfo
+from .screencast import Screencaster, SilentStream, StreamInfo, X11Screencaster
 from .sync import SyncService
 from .upload import UploadClient
 
 logger = logging.getLogger(__name__)
+
+
+def _create_screencaster(config) -> "Screencaster | X11Screencaster":
+    """Return the appropriate screencaster for the current desktop session.
+
+    Selection order:
+    1. XDG_SESSION_TYPE=x11  → X11Screencaster
+    2. WAYLAND_DISPLAY set   → Screencaster (portal/PipeWire)
+    3. Only DISPLAY set      → X11Screencaster (no Wayland available)
+    4. Fallback              → Screencaster (portal/PipeWire)
+    """
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if session_type == "x11":
+        logger.info("X11 session detected — using X11 screencaster")
+        return X11Screencaster()
+    if os.environ.get("WAYLAND_DISPLAY") or session_type == "wayland":
+        logger.info("Wayland session detected — using portal/PipeWire screencaster")
+        return Screencaster(config.restore_token_path)
+    if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        logger.info("No Wayland display found — falling back to X11 screencaster")
+        return X11Screencaster()
+    logger.info("Using portal/PipeWire screencaster (default)")
+    return Screencaster(config.restore_token_path)
+
 
 # Host identification
 HOST = socket.gethostname()
@@ -81,7 +105,7 @@ class Observer:
         self.config = config
         self.interval = config.segment_interval
         self.audio_recorder = AudioRecorder()
-        self.screencaster = Screencaster(config.restore_token_path)
+        self.screencaster = _create_screencaster(config)
         self.bus: MessageBus | None = None
         self.running = True
         self.stream = config.stream
@@ -152,11 +176,11 @@ class Observer:
         # Probe which activity signals are available (logging only)
         await probe_activity_services(self.bus)
 
-        # Verify portal is available (exit if not)
+        # Verify capture backend is available (exit if not)
         if not await self.screencaster.connect():
-            logger.error("Screencast portal not available")
+            logger.error("Screencast capture backend not available")
             return False
-        logger.info("Screencast portal connected")
+        logger.info("Screencast capture backend connected")
 
         # Initialize upload client and sync service
         self._client = UploadClient(self.config)
@@ -373,7 +397,9 @@ class Observer:
 
         try:
             streams = await self.screencaster.start(
-                str(segment_dir), framerate=1, draw_cursor=True
+                str(segment_dir),
+                framerate=self.config.capture_framerate,
+                draw_cursor=self.config.draw_cursor,
             )
         except RuntimeError as e:
             logger.error(f"Failed to start screencast: {e}")

@@ -18,6 +18,7 @@ def _set_all_checks(
     cairo_result=None,
     pipewire_result=None,
     portal_result=None,
+    x11_capture_result=None,
     systemd_result=None,
     pipx_result=None,
     appindicator_result=None,
@@ -61,6 +62,11 @@ def _set_all_checks(
     monkeypatch.setattr(doctor, "check_portal", _portal)
     monkeypatch.setattr(
         doctor,
+        "check_x11_capture",
+        lambda: x11_capture_result or doctor.CheckResult("x11 capture", "ok", ""),
+    )
+    monkeypatch.setattr(
+        doctor,
         "check_user_systemd",
         lambda: systemd_result or doctor.CheckResult("systemd --user", "ok", ""),
     )
@@ -87,7 +93,7 @@ def test_run_doctor_all_pass_returns_zero(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "python version" in captured.out
     assert "gtk4 typelib" in captured.out
-    assert "doctor: 10 checks, 0 failed, 0 warnings" in captured.out
+    assert "doctor: 11 checks, 0 failed, 0 warnings" in captured.out
 
 
 def test_run_doctor_any_fail_returns_one(monkeypatch):
@@ -159,14 +165,13 @@ def test_session_type_wayland_ok(monkeypatch):
     assert "wayland" in result.detail
 
 
-def test_session_type_x11_fails(monkeypatch):
+def test_session_type_x11_ok(monkeypatch):
     monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
 
     result = doctor.check_session_type()
 
-    assert result.severity == "fail"
+    assert result.severity == "ok"
     assert "x11" in result.detail.lower()
-    assert "wayland" in result.detail.lower()
 
 
 def test_session_type_unset_warns(monkeypatch):
@@ -305,6 +310,19 @@ async def test_check_portal_timeout_returns_fail(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_portal_x11_not_registered_returns_warn(monkeypatch):
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    fake_instance = _FakeBus(iface=_FakeIface(owned=False))
+    monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
+
+    result = await doctor.check_portal()
+
+    assert result.severity == "warn"
+    assert "x11" in result.detail.lower()
+    assert "not needed" in result.detail.lower()
+
+
+@pytest.mark.asyncio
 async def test_check_portal_tolerates_hyphenated_portal_properties(monkeypatch):
     from dbus_next.errors import InvalidMemberNameError
 
@@ -327,3 +345,87 @@ async def test_check_portal_tolerates_hyphenated_portal_properties(monkeypatch):
         "check_portal() should not introspect org.freedesktop.portal.Desktop; "
         f"calls were {fake_instance.introspect_calls!r}"
     )
+
+
+class TestCheckX11Capture:
+    def test_wayland_session_not_applicable(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.delenv("DISPLAY", raising=False)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "ok"
+        assert "not applicable" in result.detail
+
+    def test_no_display_no_x11_session_not_applicable(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "")
+        monkeypatch.delenv("DISPLAY", raising=False)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "ok"
+        assert "not applicable" in result.detail
+
+    def test_x11_session_no_display_fails(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.delenv("DISPLAY", raising=False)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "fail"
+        assert "DISPLAY" in result.detail
+
+    def test_display_set_xrandr_missing_fails(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "fail"
+        assert "xrandr" in result.detail
+
+    def test_display_set_ximagesrc_missing_fails(self, monkeypatch):
+        import subprocess as _sp
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(doctor.shutil, "which", lambda cmd: "/usr/bin/" + cmd)
+
+        completed = _sp.CompletedProcess([], returncode=1, stdout=b"", stderr=b"")
+        monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **kw: completed)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "fail"
+        assert "ximagesrc" in result.detail
+
+    def test_display_set_gst_inspect_missing_warns(self, monkeypatch):
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(doctor.shutil, "which", lambda cmd: "/usr/bin/" + cmd)
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "warn"
+        assert "gst-inspect-1.0" in result.detail
+
+    def test_all_present_ok(self, monkeypatch):
+        import subprocess as _sp
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(doctor.shutil, "which", lambda cmd: "/usr/bin/" + cmd)
+
+        completed = _sp.CompletedProcess([], returncode=0, stdout=b"", stderr=b"")
+        monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **kw: completed)
+
+        result = doctor.check_x11_capture()
+
+        assert result.severity == "ok"
+        assert "ximagesrc" in result.detail

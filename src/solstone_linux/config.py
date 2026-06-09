@@ -39,6 +39,8 @@ class Config:
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
     cache_retention_days: int = 7
     chat_bridge_enabled: bool = True
+    capture_framerate: int = 1
+    draw_cursor: bool = True
     base_dir: Path = DEFAULT_BASE_DIR
 
     @property
@@ -98,6 +100,8 @@ def load_config(base_dir: Path | None = None) -> Config:
     except (TypeError, ValueError):
         config.cache_retention_days = 7
     config.chat_bridge_enabled = data.get("chat_bridge_enabled", True)
+    config.capture_framerate = max(1, min(int(data.get("capture_framerate", 1)), 10))
+    config.draw_cursor = bool(data.get("draw_cursor", True))
 
     return config
 
@@ -115,6 +119,8 @@ def save_config(config: Config) -> None:
         "sync_max_retries": config.sync_max_retries,
         "cache_retention_days": config.cache_retention_days,
         "chat_bridge_enabled": config.chat_bridge_enabled,
+        "capture_framerate": config.capture_framerate,
+        "draw_cursor": config.draw_cursor,
     }
 
     config_path = config.config_path
