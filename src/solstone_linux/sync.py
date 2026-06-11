@@ -25,7 +25,6 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 from .config import Config
 from .upload import ErrorType, UploadClient
@@ -473,10 +472,8 @@ class SyncService:
         if not files:
             return True  # Nothing to upload
 
-        meta: dict[str, Any] = {"stream": self._config.stream}
-
         result = await asyncio.to_thread(
-            self._client.upload_segment, day, segment_key, files, meta
+            self._client.upload_segment, day, segment_key, files
         )
 
         if result.success:

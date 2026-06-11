@@ -39,7 +39,6 @@ def test_emits_with_full_fields(tmp_path: Path):
     assert 118 <= kwargs["duration_seconds"] <= 122
     assert kwargs["host"] == HOST
     assert kwargs["platform"] == PLATFORM
-    assert kwargs["stream"] == observer.stream
 
 
 def test_skips_when_client_none(tmp_path: Path):

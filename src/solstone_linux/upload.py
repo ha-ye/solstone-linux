@@ -13,10 +13,9 @@ Refinements over tmux baseline:
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
-import subprocess
+import platform
+import socket
 import time
 from enum import Enum
 from pathlib import Path
@@ -24,12 +23,17 @@ from typing import Any, NamedTuple
 
 import requests
 
+from . import __version__
 from .config import Config
 
 logger = logging.getLogger(__name__)
 
 UPLOAD_TIMEOUT = 300
 EVENT_TIMEOUT = 30
+
+
+def _auth_headers(key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {key}"}
 
 
 class ErrorType(Enum):
@@ -63,65 +67,47 @@ class UploadClient:
     def is_revoked(self) -> bool:
         return self._revoked
 
-    def _persist_key(self, config: Config, key: str) -> None:
-        """Save auto-registered key back to config."""
+    def _persist_registration(self, config: Config, key: str, stream: str) -> None:
+        """Persist the server-issued handle and locked stream back to config."""
         from .config import save_config
 
         config.key = key
+        config.stream = stream
         save_config(config)
 
     def ensure_registered(self, config: Config) -> bool:
-        """Ensure the client has a valid key, auto-registering if needed.
+        """Register this observer over HTTP, persisting the handle + locked stream.
 
-        Tries sol CLI first (no server needed), falls back to HTTP.
-        Returns True if a key is available.
+        Short-circuits if a key is already present. Returns True if a key is available.
         """
         if self._key:
             return True
-
-        # Try sol CLI registration first
-        name = self._stream or "solstone-linux"
-        sol = shutil.which("sol")
-        if sol:
-            try:
-                result = subprocess.run(
-                    [sol, "observer", "--json", "create", name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    self._key = data["key"]
-                    self._persist_key(config, self._key)
-                    logger.info(f"CLI-registered as '{name}' (key: {self._key[:8]}...)")
-                    return True
-            except (
-                subprocess.TimeoutExpired,
-                json.JSONDecodeError,
-                KeyError,
-                OSError,
-            ) as e:
-                logger.debug(f"CLI registration failed: {e}")
-
         if not self._url:
             return False
 
-        url = f"{self._url}/app/observer/api/create"
+        descriptor: dict[str, Any] = {
+            "platform": platform.system().lower(),
+            "hostname": socket.gethostname(),
+            "stream_type": "desktop",
+            "version": __version__,
+        }
+        if self._stream:
+            descriptor["label"] = self._stream
+
+        url = f"{self._url}/app/observer/register"
 
         retries = min(3, len(self._retry_backoff))
         for attempt in range(retries):
             delay = self._retry_backoff[min(attempt, len(self._retry_backoff) - 1)]
             try:
-                resp = self._session.post(
-                    url, json={"name": name}, timeout=EVENT_TIMEOUT
-                )
+                resp = self._session.post(url, json=descriptor, timeout=EVENT_TIMEOUT)
                 if resp.status_code == 200:
                     data = resp.json()
                     self._key = data["key"]
-                    self._persist_key(config, self._key)
+                    self._stream = data["name"]
+                    self._persist_registration(config, data["key"], data["name"])
                     logger.info(
-                        f"Auto-registered as '{name}' (key: {self._key[:8]}...)"
+                        f"Registered as '{data['name']}' (key: {self._key[:8]}...)"
                     )
                     return True
                 elif resp.status_code == 403:
@@ -161,7 +147,6 @@ class UploadClient:
         day: str,
         segment: str,
         files: list[Path],
-        meta: dict[str, Any] | None = None,
     ) -> UploadResult:
         """Upload a segment's files to the ingest server."""
         if self._revoked or not self._key or not self._url:
@@ -169,7 +154,7 @@ class UploadClient:
                 False, error_type=ErrorType.AUTH if self._revoked else None
             )
 
-        url = f"{self._url}/app/observer/ingest/{self._key}"
+        url = f"{self._url}/app/observer/ingest"
 
         for attempt in range(self._max_retries):
             file_handles = []
@@ -189,12 +174,14 @@ class UploadClient:
                 if not files_data:
                     return UploadResult(False)
 
-                data: dict[str, Any] = {"day": day, "segment": segment}
-                if meta:
-                    data["meta"] = json.dumps(meta)
+                data = {"day": day, "segment": segment}
 
                 response = self._session.post(
-                    url, data=data, files=files_data, timeout=UPLOAD_TIMEOUT
+                    url,
+                    data=data,
+                    files=files_data,
+                    headers=_auth_headers(self._key),
+                    timeout=UPLOAD_TIMEOUT,
                 )
 
                 if response.status_code == 200:
@@ -249,13 +236,12 @@ class UploadClient:
         if self._revoked or not self._key or not self._url:
             return None
 
-        url = f"{self._url}/app/observer/ingest/{self._key}/segments/{day}"
-        params = {}
-        if self._stream:
-            params["stream"] = self._stream
+        url = f"{self._url}/app/observer/ingest/segments/{day}"
 
         try:
-            resp = self._session.get(url, params=params, timeout=EVENT_TIMEOUT)
+            resp = self._session.get(
+                url, headers=_auth_headers(self._key), timeout=EVENT_TIMEOUT
+            )
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code in (401, 403):
@@ -274,10 +260,15 @@ class UploadClient:
         if self._revoked or not self._key or not self._url:
             return False
 
-        url = f"{self._url}/app/observer/ingest/{self._key}/event"
+        url = f"{self._url}/app/observer/ingest/event"
         payload = {"tract": tract, "event": event, **fields}
         try:
-            resp = self._session.post(url, json=payload, timeout=EVENT_TIMEOUT)
+            resp = self._session.post(
+                url,
+                json=payload,
+                headers=_auth_headers(self._key),
+                timeout=EVENT_TIMEOUT,
+            )
             if resp.status_code == 200:
                 return True
             if resp.status_code == 403:

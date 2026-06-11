@@ -325,3 +325,61 @@ def test_cmd_setup_cli_token_beats_env(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert saved_config.key == "clitok"
     assert "shared machines" in captured.err
+
+
+def test_cmd_setup_registers_via_http_when_no_token(tmp_path: Path):
+    args = argparse.Namespace(
+        server_url="http://localhost:9",
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    def _register(cfg):
+        cfg.key = "newkey00"
+        cfg.stream = "locked-stream"
+        return True
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config"):
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        side_effect=_register,
+                    ) as reg_mock:
+                        assert cmd_setup(args) == 0
+
+    reg_mock.assert_called_once()
+    assert config.key == "newkey00"
+    assert config.stream == "locked-stream"
+
+
+def test_cmd_setup_http_register_failure_non_interactive_returns_1(
+    tmp_path: Path, capsys
+):
+    args = argparse.Namespace(
+        server_url="http://localhost:9",
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config"):
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        return_value=False,
+                    ):
+                        assert cmd_setup(args) == 1
+
+    captured = capsys.readouterr()
+    assert "registration failed" in captured.out.lower()
