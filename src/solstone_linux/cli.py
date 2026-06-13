@@ -134,44 +134,23 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
         return 0
 
-    print(f"Stream: {config.stream}")
     save_config(config)
 
     if not config.key:
-        sol = shutil.which("sol")
-        if sol:
-            print("Registering via sol CLI...")
-            try:
-                result = subprocess.run(
-                    [sol, "observer", "--json", "create", config.stream],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    config.key = data["key"]
-                    save_config(config)
-                    print(f"Registered (key: {config.key[:8]}...)")
-                else:
-                    print("CLI registration failed, trying HTTP...")
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
-                print("CLI registration failed, trying HTTP...")
-
-        if not config.key:
-            print("Registering with your journal...")
-            client = UploadClient(config)
-            if client.ensure_registered(config):
-                config = load_config()
-                print(f"Registered (key: {config.key[:8]}...)")
-            else:
-                print(
-                    "Warning: registration failed. Run setup again when your journal is available."
-                )
-                if non_interactive:
-                    return 1
+        print("Registering with your journal...")
+        client = UploadClient(config)
+        if client.ensure_registered(config):
+            print(f"Registered (key: {config.key[:8]}...)")
+            print(f"Stream: {config.stream}")
+        else:
+            print(
+                "Warning: registration failed. Run setup again when your journal is available."
+            )
+            if non_interactive:
+                return 1
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
+        print(f"Stream: {config.stream}")
 
     print(f"\nConfig saved to {config.config_path}")
     print(f"Captures will go to {config.captures_dir}")
@@ -203,46 +182,24 @@ def _cmd_setup_interactive() -> int:
         except ValueError as e:
             print(f"Error deriving stream name: {e}", file=sys.stderr)
             return 1
-    print(f"Stream: {config.stream}")
 
     # Save config before registration (so URL is persisted)
     config.ensure_dirs()
     save_config(config)
 
-    # Auto-register — try sol CLI first (no server needed), fall back to HTTP
     if not config.key:
-        sol = shutil.which("sol")
-        if sol:
-            print("Registering via sol CLI...")
-            try:
-                result = subprocess.run(
-                    [sol, "observer", "--json", "create", config.stream],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    config.key = data["key"]
-                    save_config(config)
-                    print(f"Registered (key: {config.key[:8]}...)")
-                else:
-                    print("CLI registration failed, trying HTTP...")
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
-                print("CLI registration failed, trying HTTP...")
-
-        if not config.key:
-            print("Registering with your journal...")
-            client = UploadClient(config)
-            if client.ensure_registered(config):
-                config = load_config()
-                print(f"Registered (key: {config.key[:8]}...)")
-            else:
-                print(
-                    "Warning: registration failed. Run setup again when your journal is available."
-                )
+        print("Registering with your journal...")
+        client = UploadClient(config)
+        if client.ensure_registered(config):
+            print(f"Registered (key: {config.key[:8]}...)")
+            print(f"Stream: {config.stream}")
+        else:
+            print(
+                "Warning: registration failed. Run setup again when your journal is available."
+            )
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
+        print(f"Stream: {config.stream}")
 
     print(f"\nConfig saved to {config.config_path}")
     print(f"Captures will go to {config.captures_dir}")

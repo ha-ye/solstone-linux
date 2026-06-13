@@ -186,6 +186,7 @@ class Observer:
         self._client = UploadClient(self.config)
         if self.config.server_url:
             self._client.ensure_registered(self.config)
+        self.stream = self.config.stream
         self._sync = SyncService(self.config, self._client)
 
         from .dbus_service import BUS_NAME, OBJECT_PATH, ObserverService
@@ -433,7 +434,6 @@ class Observer:
             duration_seconds=duration_seconds,
             host=HOST,
             platform=PLATFORM,
-            stream=self.stream,
         )
 
     def emit_status(self):
@@ -484,7 +484,6 @@ class Observer:
             activity=activity_info,
             host=HOST,
             platform=PLATFORM,
-            stream=self.stream,
         )
 
     def _refresh_tray(self):

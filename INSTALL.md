@@ -79,7 +79,7 @@ this is the developer/from-source path; most installs should use the `pipx insta
    ```
    solstone-linux setup
    ```
-   this prompts for the journal URL and auto-registers via `sol` when available.
+   this prompts for the journal URL and registers the observer with your journal.
 
 4. verify the service is running:
    ```
