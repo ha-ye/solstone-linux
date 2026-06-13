@@ -4,6 +4,18 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.2.0] - 2026-06-13
+
+setup is now hands-off: the first time the observer runs, it connects itself
+to your journal automatically, with no separate key step.
+
+### Changed
+
+- **first run sets itself up.** earlier versions asked you to create and paste
+  a key to connect the observer to your journal. now the observer introduces
+  itself to your journal on first run and remembers the connection on its own.
+  you go straight from install to observing, with no manual key step.
+
 ## [0.1.1] - 2026-06-02
 
 A focused maintenance release: two reliability fixes and a round of
