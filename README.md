@@ -18,7 +18,7 @@ Standalone Linux desktop observer for [solstone](https://solpbc.org). Experience
 
    **Arch:**
    ```
-   sudo pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire libpulse alsa-lib xdg-desktop-portal pipx
+   sudo pacman -S python-gobject gtk4 gstreamer gst-plugin-pipewire gst-plugins-good libpulse alsa-lib xdg-desktop-portal python-pipx uv python-cairo
    ```
 
    **openSUSE:**
