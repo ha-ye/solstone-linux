@@ -207,6 +207,7 @@ class TestHeaderLabel:
     def test_update_header_emits_label_property_update(self):
         app = _make_app()
         app._build_menu()
+        app.status = "recording"
         app.menu.update_properties = MagicMock()
         app.sync_status = "offline"
 
@@ -281,6 +282,7 @@ class TestComputeHeaderLabel:
 class TestBuildTooltip:
     def test_build_tooltip_default(self):
         app = _make_app()
+        app.status = "recording"
 
         tooltip = app._build_tooltip()
 
@@ -325,6 +327,20 @@ class TestStatusNotifierItem:
 
 
 class TestUpdate:
+    def test_first_update_clears_starting_tooltip(self):
+        """Tray tooltip must not stay on 'starting...' after first update."""
+        app = _make_app()
+        app._build_menu()
+        # Simulate what TrayApp.start() sets before any update
+        app.sni.set_tooltip("solstone observer", "starting...")
+        app._observer.current_mode = "screencast"
+        app._observer._paused = False
+
+        app.update()
+
+        # Tooltip body should no longer be "starting..."
+        assert app.sni._tooltip_body != "starting..."
+
     def test_update_reads_observer_state(self):
         app = _make_app()
         app._build_menu()
