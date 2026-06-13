@@ -4,6 +4,9 @@
 """Tests for the observer module — segment lifecycle and local cache."""
 
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from solstone_linux.config import Config
 from solstone_linux.observer import Observer
@@ -69,8 +72,6 @@ class TestPauseResumeState:
         assert observer._tray.update.called is True
 
     def test_resume_refreshes_tray(self, tmp_path: Path):
-        from unittest.mock import MagicMock
-
         config = Config(base_dir=tmp_path)
         observer = Observer(config)
         observer._tray = MagicMock()
@@ -78,3 +79,63 @@ class TestPauseResumeState:
         observer.resume()
 
         assert observer._tray.update.called is True
+
+
+class TestStartPaused:
+    @pytest.mark.asyncio
+    async def test_start_paused_true_skips_initial_capture(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.start_paused = True
+        config.chat_bridge_enabled = False
+        observer = Observer(config)
+        observer._sync = None
+
+        capture_calls = []
+
+        async def mock_check_activity():
+            return "screencast"
+
+        async def mock_initialize():
+            capture_calls.append("initialize")
+
+        async def mock_sleep(_duration):
+            observer.running = False
+
+        with patch.object(observer, "check_activity_status", mock_check_activity), \
+             patch.object(observer, "initialize_screencast", mock_initialize), \
+             patch.object(observer, "_start_segment", lambda: capture_calls.append("segment")), \
+             patch.object(observer, "emit_status"), \
+             patch.object(observer, "_refresh_tray"), \
+             patch.object(observer, "shutdown", AsyncMock()), \
+             patch("solstone_linux.observer.asyncio.sleep", mock_sleep):
+            await observer.main_loop()
+
+        assert observer._paused is True
+        assert capture_calls == []
+
+    @pytest.mark.asyncio
+    async def test_start_paused_false_starts_capture(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.start_paused = False
+        config.chat_bridge_enabled = False
+        observer = Observer(config)
+        observer._sync = None
+
+        capture_calls = []
+
+        async def mock_check_activity():
+            return "idle"
+
+        async def mock_sleep(_duration):
+            observer.running = False
+
+        with patch.object(observer, "check_activity_status", mock_check_activity), \
+             patch.object(observer, "_start_segment", lambda: capture_calls.append("segment")), \
+             patch.object(observer, "emit_status"), \
+             patch.object(observer, "_refresh_tray"), \
+             patch.object(observer, "shutdown", AsyncMock()), \
+             patch("solstone_linux.observer.asyncio.sleep", mock_sleep):
+            await observer.main_loop()
+
+        assert observer._paused is False
+        assert "segment" in capture_calls

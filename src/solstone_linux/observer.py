@@ -545,30 +545,35 @@ class Observer:
         self.segment_is_muted = self.cached_is_muted
         self.current_mode = new_mode
 
-        # Start initial capture based on mode
-        if new_mode == MODE_SCREENCAST and not self.cached_screen_locked:
-            try:
-                await self.initialize_screencast()
-            except RuntimeError:
-                self.running = False
-                if sync_task:
-                    if self._sync:
-                        self._sync.stop()
-                    sync_task.cancel()
-                    try:
-                        await sync_task
-                    except asyncio.CancelledError:
-                        pass
-                bridge_stop_event.set()
-                if bridge_task:
-                    bridge_task.cancel()
-                    try:
-                        await bridge_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                return
-        else:
-            self._start_segment()
+        if self.config.start_paused:
+            self.pause(0)
+            logger.info("Starting in paused mode (start_paused=true)")
+
+        # Start initial capture based on mode (skipped when starting paused)
+        if not self._paused:
+            if new_mode == MODE_SCREENCAST and not self.cached_screen_locked:
+                try:
+                    await self.initialize_screencast()
+                except RuntimeError:
+                    self.running = False
+                    if sync_task:
+                        if self._sync:
+                            self._sync.stop()
+                        sync_task.cancel()
+                        try:
+                            await sync_task
+                        except asyncio.CancelledError:
+                            pass
+                    bridge_stop_event.set()
+                    if bridge_task:
+                        bridge_task.cancel()
+                        try:
+                            await bridge_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    return
+            else:
+                self._start_segment()
 
         logger.info(f"Initial mode: {self.current_mode}")
 

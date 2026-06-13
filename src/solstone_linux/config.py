@@ -41,6 +41,7 @@ class Config:
     chat_bridge_enabled: bool = True
     capture_framerate: int = 1
     draw_cursor: bool = True
+    start_paused: bool = False
     base_dir: Path = DEFAULT_BASE_DIR
 
     @property
@@ -102,6 +103,7 @@ def load_config(base_dir: Path | None = None) -> Config:
     config.chat_bridge_enabled = data.get("chat_bridge_enabled", True)
     config.capture_framerate = max(1, min(int(data.get("capture_framerate", 1)), 10))
     config.draw_cursor = bool(data.get("draw_cursor", True))
+    config.start_paused = bool(data.get("start_paused", False))
 
     return config
 
@@ -121,6 +123,7 @@ def save_config(config: Config) -> None:
         "chat_bridge_enabled": config.chat_bridge_enabled,
         "capture_framerate": config.capture_framerate,
         "draw_cursor": config.draw_cursor,
+        "start_paused": config.start_paused,
     }
 
     config_path = config.config_path
