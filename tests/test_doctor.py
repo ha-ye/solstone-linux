@@ -273,6 +273,7 @@ async def test_check_portal_registered_returns_ok(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_check_portal_not_registered_returns_fail(monkeypatch):
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
     fake_instance = _FakeBus(iface=_FakeIface(owned=False))
     monkeypatch.setattr("dbus_next.aio.MessageBus", lambda bus_type=None: fake_instance)
 
