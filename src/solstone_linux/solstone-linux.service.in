@@ -1,7 +1,6 @@
 [Unit]
 Description=Solstone Linux Desktop Observer
 After=graphical-session.target
-BindsTo=graphical-session.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -14,4 +13,4 @@ Restart=on-failure
 RestartSec=10
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
