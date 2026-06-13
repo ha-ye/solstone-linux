@@ -96,8 +96,9 @@ class TrayApp:
         self.sni = StatusNotifierItem("solstone-observer")
         self.menu = DBusMenu()
 
-        # State cache (for change detection)
-        self.status = "recording"
+        # State cache (for change detection) — empty string forces first update()
+        # call to always go through _update_status regardless of initial mode
+        self.status = ""
         self.sync_status = "synced"
         self.sync_progress = ""
         self.error = ""

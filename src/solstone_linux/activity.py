@@ -12,6 +12,9 @@ running regardless of desktop environment.
 import asyncio
 import logging
 import os
+import re
+import shutil
+import subprocess
 
 from dbus_next import Variant
 from dbus_next.aio import MessageBus
@@ -113,6 +116,83 @@ async def _name_has_owner(bus: MessageBus, bus_name: str) -> bool:
         return False
 
 
+def get_monitor_geometries_x11() -> list[dict]:
+    """Get monitor geometry from xrandr (X11 only).
+
+    Returns:
+        List of dicts with format:
+        [{"id": "connector-id", "box": [x1, y1, x2, y2], "position": "..."}, ...]
+        Empty list if xrandr is unavailable or returns no connected monitors.
+    """
+    try:
+        result = subprocess.run(
+            ["xrandr"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    from .monitor_positions import assign_monitor_positions
+
+    monitors = []
+    for line in result.stdout.splitlines():
+        if " connected" not in line or "disconnected" in line:
+            continue
+        parts = line.split()
+        name = parts[0]
+        for part in parts:
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", part)
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                x, y = int(m.group(3)), int(m.group(4))
+                if x < 0 or y < 0:
+                    logger.warning(
+                        "Skipping monitor %s with negative offset (%d, %d); "
+                        "ximagesrc requires non-negative coordinates",
+                        name,
+                        x,
+                        y,
+                    )
+                    break
+                monitors.append({"id": name, "box": [x, y, x + w, y + h]})
+                break
+
+    return assign_monitor_positions(monitors)
+
+
+async def is_dpms_active() -> bool:
+    """Check if DPMS has powered off the display (X11 only).
+
+    Runs xset q and parses the monitor state line.
+    Returns True if the display is in standby/suspend/off state, False otherwise.
+    Degrades gracefully to False when xset is unavailable or returns an error.
+    """
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["xset", "q"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Monitor is"):
+            return stripped != "Monitor is On"
+    return False
+
+
 async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     """Check which activity DBus services are reachable."""
     services = {
@@ -126,17 +206,24 @@ async def probe_activity_services(bus: MessageBus) -> dict[str, bool]:
     for name, bus_name in services.items():
         results[name] = await _name_has_owner(bus, bus_name)
 
+    # DPMS is X11-only, checked via xset availability
+    results["dpms"] = bool(shutil.which("xset"))
+    results["gtk4"] = _HAS_GTK
+
     # Log grouped by function
     lock_backends = ["fdo_screensaver", "gnome_screensaver"]
     power_backends = ["gnome_display_config", "kde_power"]
     monitor_backends = ["kscreen"]
-    results["gtk4"] = _HAS_GTK
 
     def _status(keys):
         return ", ".join(f"{k} [{'ok' if results[k] else 'missing'}]" for k in keys)
 
     logger.info("Screen lock backends: %s", _status(lock_backends))
-    logger.info("Power save backends: %s", _status(power_backends))
+    logger.info(
+        "Power save backends: %s, dpms [%s]",
+        _status(power_backends),
+        "ok" if results["dpms"] else "missing",
+    )
     logger.info(
         "Monitor backends: %s, gtk4 [%s]",
         _status(monitor_backends),
@@ -265,7 +352,12 @@ async def is_power_save_active(bus: MessageBus) -> bool:
     ) as exc:
         if not _is_service_missing(exc):
             log_backend_failure_once("KDE", KDE_POWER_BUS, KDE_POWER_PATH, exc)
-        return False
+
+    # X11-only fallback: DPMS via xset
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "x11":
+        return await is_dpms_active()
+
+    return False
 
 
 def get_monitor_geometries() -> list[dict]:

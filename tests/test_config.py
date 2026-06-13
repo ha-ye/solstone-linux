@@ -84,3 +84,74 @@ class TestConfig:
 
         loaded = load_config(tmp_path)
         assert loaded.cache_retention_days == 7
+
+    def test_capture_framerate_default(self):
+        config = Config()
+        assert config.capture_framerate == 1
+
+    def test_draw_cursor_default(self):
+        config = Config()
+        assert config.draw_cursor is True
+
+    def test_capture_framerate_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.capture_framerate = 2
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.capture_framerate == 2
+
+    def test_draw_cursor_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.draw_cursor = False
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.draw_cursor is False
+
+    def test_capture_framerate_defaults_on_old_config(self, tmp_path: Path):
+        """Existing configs without capture_framerate default to 1."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"server_url": "http://test"}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.capture_framerate == 1
+        assert loaded.draw_cursor is True
+
+    def test_capture_framerate_clamped_to_max(self, tmp_path: Path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"capture_framerate": 999}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.capture_framerate == 10
+
+    def test_capture_framerate_clamped_to_min(self, tmp_path: Path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"capture_framerate": 0}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.capture_framerate == 1
+
+    def test_start_paused_default(self):
+        config = Config()
+        assert config.start_paused is False
+
+    def test_start_paused_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.start_paused = True
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.start_paused is True
+
+    def test_start_paused_defaults_on_old_config(self, tmp_path: Path):
+        """Existing configs without start_paused default to False."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"server_url": "http://test"}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.start_paused is False

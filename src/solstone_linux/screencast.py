@@ -23,6 +23,7 @@ Runtime deps:
 import asyncio
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import uuid
@@ -610,6 +611,197 @@ class Screencaster:
                     exc,
                 )
         self.session_handle = None
+
+    def is_healthy(self) -> bool:
+        """Check if recording is still running."""
+        if not self._started:
+            return False
+        if self.gst_process is None:
+            return False
+        return self.gst_process.poll() is None
+
+
+class X11Screencaster:
+    """X11 screen capture using GStreamer ximagesrc.
+
+    Mirrors the Screencaster interface so the observer can use either
+    backend interchangeably.  Each connected monitor becomes one independent
+    GStreamer branch writing a VP8/WebM file at the configured framerate.
+    """
+
+    def __init__(self):
+        self.gst_process: subprocess.Popen | None = None
+        self.streams: list[StreamInfo] = []
+        self._started = False
+
+    async def connect(self) -> bool:
+        """Verify the X11 display and GStreamer are available."""
+        if not os.environ.get("DISPLAY"):
+            logger.error("X11 capture: DISPLAY not set")
+            return False
+        if shutil.which("gst-launch-1.0") is None:
+            logger.error("X11 capture: gst-launch-1.0 not found")
+            return False
+        return True
+
+    async def start(
+        self,
+        output_dir: str,
+        framerate: int = 1,
+        draw_cursor: bool = True,
+    ) -> list[StreamInfo]:
+        """Start X11 screencast recording for all monitors.
+
+        Files are written to output_dir with names position_connector_screen.webm,
+        identical to the Wayland backend.
+
+        Raises:
+            RuntimeError: If no monitors are found or GStreamer fails to start.
+        """
+        display = os.environ.get("DISPLAY", ":0")
+
+        from .activity import get_monitor_geometries, get_monitor_geometries_x11
+
+        monitors = get_monitor_geometries_x11()
+        if not monitors:
+            try:
+                monitors = get_monitor_geometries()
+            except Exception as e:
+                logger.warning("GDK monitor fallback failed: %s", e)
+
+        if not monitors:
+            raise RuntimeError("No monitors found for X11 capture")
+
+        show_pointer = "true" if draw_cursor else "false"
+        self.streams = []
+        pipeline_parts = []
+
+        for idx, monitor in enumerate(monitors):
+            x1, y1, x2, y2 = monitor["box"]
+            w, h = x2 - x1, y2 - y1
+            position = monitor.get("position", "center")
+            connector = monitor["id"]
+
+            file_path = os.path.join(output_dir, f"{position}_{connector}_screen.webm")
+
+            stream_obj = StreamInfo(
+                node_id=idx,
+                position=position,
+                connector=connector,
+                x=x1,
+                y=y1,
+                width=w,
+                height=h,
+                file_path=file_path,
+            )
+            self.streams.append(stream_obj)
+
+            # ximagesrc endx/endy are inclusive pixel indices
+            endx = x1 + w - 1
+            endy = y1 + h - 1
+
+            branch = (
+                f"ximagesrc display-name={display} "
+                f"startx={x1} starty={y1} endx={endx} endy={endy} "
+                f"use-damage=false show-pointer={show_pointer} ! "
+                f"videorate ! video/x-raw,framerate={framerate}/1 ! "
+                f"videoconvert ! vp8enc end-usage=cq cq-level=4 max-quantizer=15 "
+                f"keyframe-max-dist=30 static-threshold=100 ! webmmux ! "
+                f"filesink location={file_path}"
+            )
+            pipeline_parts.append(branch)
+
+            logger.info(
+                "  X11 stream %d: %s (%s) -> %s", idx, position, connector, file_path
+            )
+
+        pipeline_str = " ".join(pipeline_parts)
+        cmd = ["gst-launch-1.0", "-e"] + pipeline_str.split()
+
+        try:
+            self.gst_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise RuntimeError("gst-launch-1.0 not found")
+        except Exception as e:
+            raise RuntimeError(f"Failed to start GStreamer (X11): {e}")
+
+        await asyncio.sleep(0.2)
+        if self.gst_process.poll() is not None:
+            stderr = (
+                self.gst_process.stderr.read().decode()
+                if self.gst_process.stderr
+                else ""
+            )
+            raise RuntimeError(f"GStreamer (X11) exited immediately: {stderr[:200]}")
+
+        self._started = True
+        return self.streams
+
+    async def stop(self) -> tuple[list[StreamInfo], list[SilentStream]]:
+        """Stop X11 screencast recording gracefully."""
+        streams = self.streams.copy()
+
+        if self.gst_process and self.gst_process.poll() is None:
+            try:
+                self.gst_process.send_signal(signal.SIGINT)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self.gst_process.wait),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("GStreamer (X11) did not exit cleanly, killing")
+                    self.gst_process.kill()
+                    self.gst_process.wait()
+            except Exception as e:
+                logger.warning("Error stopping GStreamer (X11): %s", e)
+
+        self.gst_process = None
+
+        healthy: list[StreamInfo] = []
+        silent: list[SilentStream] = []
+        for stream in streams:
+            file_path = Path(stream.file_path)
+            try:
+                file_bytes = file_path.stat().st_size
+            except FileNotFoundError:
+                file_bytes = 0
+            except OSError as exc:
+                logger.warning("could not stat %s: %s", file_path, exc)
+                file_bytes = 0
+
+            if file_bytes >= MIN_HEALTHY_WEBM_BYTES:
+                healthy.append(stream)
+                continue
+
+            silent.append(
+                SilentStream(
+                    node_id=stream.node_id,
+                    connector=stream.connector,
+                    position=stream.position,
+                    file_path=file_path,
+                    file_bytes=file_bytes,
+                )
+            )
+            logger.warning(
+                "silent stream dropped: connector=%s position=%s file_bytes=%d path=%s",
+                stream.connector,
+                stream.position,
+                file_bytes,
+                file_path,
+            )
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("could not unlink silent stream %s: %s", file_path, exc)
+
+        self.streams = []
+        self._started = False
+        return healthy, silent
 
     def is_healthy(self) -> bool:
         """Check if recording is still running."""

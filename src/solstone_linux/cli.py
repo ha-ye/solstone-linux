@@ -241,6 +241,28 @@ def cmd_install_service(args: argparse.Namespace) -> int:
     unit_path.write_text(unit)
     print(f"Wrote {unit_path}")
 
+    # XDG autostart entry — X11 session managers that don't activate
+    # graphical-session.target (the systemd unit's WantedBy target) need this
+    # to autostart the service.  On Wayland, `start` is a no-op when the
+    # service is already running.
+    autostart_dir = Path.home() / ".config" / "autostart"
+    autostart_dir.mkdir(parents=True, exist_ok=True)
+    autostart_path = autostart_dir / "solstone-linux.desktop"
+    autostart_path.write_text(
+        "[Desktop Entry]\n"
+        "Version=1.2\n"
+        "Type=Application\n"
+        "Name=Solstone Observer\n"
+        "Comment=Experience screen and audio with your solstone journal\n"
+        "Exec=/bin/sh -c 'systemctl --user import-environment"
+        " DISPLAY XAUTHORITY XDG_SESSION_TYPE 2>/dev/null;"
+        " systemctl --user start solstone-linux.service'\n"
+        "StartupNotify=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+        "Hidden=false\n"
+    )
+    print(f"Wrote {autostart_path}")
+
     # Reload, enable, restart, and show status
     try:
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)

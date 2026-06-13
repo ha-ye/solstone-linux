@@ -83,22 +83,17 @@ def check_session_type() -> CheckResult:
     if session_type == "wayland":
         return CheckResult("session type", "ok", "wayland")
     if session_type == "x11":
-        return CheckResult(
-            "session type",
-            "fail",
-            "x11 session; ScreenCast portal needs Wayland "
-            "(KDE's screencast protocol is Wayland-only)",
-        )
+        return CheckResult("session type", "ok", "x11 (using ximagesrc capture)")
     if not session_type:
         return CheckResult(
             "session type",
             "warn",
-            "XDG_SESSION_TYPE not set; ScreenCast requires a Wayland session",
+            "XDG_SESSION_TYPE not set; Wayland or X11 required",
         )
     return CheckResult(
         "session type",
         "warn",
-        f"unrecognized session type '{session_type}'; Wayland required",
+        f"unrecognized session type '{session_type}'; Wayland or X11 required",
     )
 
 
@@ -162,6 +157,13 @@ async def check_portal() -> CheckResult:
                     "ok",
                     "org.freedesktop.portal.Desktop registered on session bus",
                 )
+            session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+            if session_type == "x11":
+                return CheckResult(
+                    "xdg-desktop-portal",
+                    "warn",
+                    "not registered — not needed on X11 (using ximagesrc)",
+                )
             return CheckResult(
                 "xdg-desktop-portal",
                 "fail",
@@ -179,6 +181,47 @@ async def check_portal() -> CheckResult:
             "fail",
             f"timed out after {_PORTAL_CHECK_TIMEOUT_SEC:g}s",
         )
+
+
+def check_x11_capture() -> CheckResult:
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if session_type == "wayland":
+        return CheckResult("x11 capture", "ok", "not applicable (wayland session)")
+    if not os.environ.get("DISPLAY"):
+        if session_type != "x11":
+            return CheckResult("x11 capture", "ok", "not applicable (no X11 display)")
+        return CheckResult("x11 capture", "fail", "DISPLAY not set")
+    if shutil.which("xrandr") is None:
+        return CheckResult(
+            "x11 capture",
+            "fail",
+            "xrandr not on PATH; install x11-xserver-utils or equivalent",
+        )
+    try:
+        result = subprocess.run(
+            ["gst-inspect-1.0", "ximagesrc"],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return CheckResult(
+                "x11 capture",
+                "fail",
+                "ximagesrc plugin missing; install gstreamer1.0-plugins-good",
+            )
+    except FileNotFoundError:
+        return CheckResult(
+            "x11 capture",
+            "warn",
+            "could not verify ximagesrc (gst-inspect-1.0 not found)",
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            "x11 capture",
+            "warn",
+            "could not verify ximagesrc (gst-inspect-1.0 timed out)",
+        )
+    return CheckResult("x11 capture", "ok", "xrandr and ximagesrc available")
 
 
 def check_user_systemd() -> CheckResult:
@@ -252,6 +295,7 @@ def run_doctor() -> int:
         ("cairo binding", check_cairo),
         ("pipewire (pactl)", check_pipewire),
         ("xdg-desktop-portal", lambda: asyncio.run(check_portal())),
+        ("x11 capture", check_x11_capture),
         ("systemd --user", check_user_systemd),
         ("pipx", check_pipx),
         ("appindicator ext (soft)", check_appindicator_ext),

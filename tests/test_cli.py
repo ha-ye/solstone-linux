@@ -238,6 +238,23 @@ def test_cmd_install_service_survives_nonzero_gtk_update_icon_cache(tmp_path: Pa
                 assert cmd_install_service(_args()) == 0
 
 
+def test_cmd_install_service_writes_autostart_entry(tmp_path: Path):
+    with patch("solstone_linux.cli.shutil.which", return_value=_BINARY):
+        with patch("solstone_linux.cli.Path.home", return_value=tmp_path):
+            with patch("solstone_linux.cli.subprocess.run"):
+                assert cmd_install_service(_args()) == 0
+
+    autostart = tmp_path / ".config" / "autostart" / "solstone-linux.desktop"
+    assert autostart.exists()
+    content = autostart.read_text()
+    assert "Type=Application" in content
+    assert "solstone-linux.service" in content
+    assert "import-environment" in content
+    assert "DISPLAY" in content
+    assert "XAUTHORITY" in content
+    assert "XDG_SESSION_TYPE" in content
+
+
 def test_cmd_setup_non_interactive_happy_path(tmp_path: Path):
     args = argparse.Namespace(
         server_url="https://x",
