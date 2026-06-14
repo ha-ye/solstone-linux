@@ -4,6 +4,16 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.3.0] - 2026-06-14
+
+setup is now zero-config: the observer connects to your journal automatically,
+with no url to type.
+
+### Changed
+- setup no longer asks for a journal url. if your journal runs on another
+  machine you reach directly, set its address with
+  `solstone-linux setup --server-url <url>`.
+
 ## [0.2.0] - 2026-06-13
 
 setup is now hands-off: the first time the observer runs, it connects itself
