@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 from . import doctor, streams
-from .config import load_config, save_config
+from .config import DEFAULT_SERVER_URL, load_config, save_config
 from .streams import stream_name
 
 
@@ -94,19 +94,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     config = load_config()
 
     server_url = getattr(args, "server_url", None) or config.server_url
-    if not server_url:
-        if non_interactive:
-            print(
-                "error: --server-url required with --non-interactive", file=sys.stderr
-            )
-            return 2
-        default_url = config.server_url or ""
-        url = input(f"Solstone journal URL [{default_url}]: ").strip()
-        if url:
-            server_url = url
-        elif not config.server_url:
-            print("Error: journal URL is required", file=sys.stderr)
-            return 1
+    if not server_url and not non_interactive:
+        url = input(f"Solstone journal URL [{DEFAULT_SERVER_URL}]: ").strip()
+        server_url = url or DEFAULT_SERVER_URL
+    server_url = server_url or DEFAULT_SERVER_URL
     config.server_url = server_url
 
     stream_override = getattr(args, "stream_name", None)
@@ -161,19 +152,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def _cmd_setup_interactive() -> int:
-    # Keep the legacy no-flags setup path separate so its prompt/output stays byte-identical.
+    # Keep the legacy no-flags setup path separate so its output stays stable.
     from .upload import UploadClient
 
     config = load_config()
 
     # Prompt for server URL
-    default_url = config.server_url or ""
+    default_url = config.server_url or DEFAULT_SERVER_URL
     url = input(f"Solstone journal URL [{default_url}]: ").strip()
-    if url:
-        config.server_url = url
-    elif not config.server_url:
-        print("Error: journal URL is required", file=sys.stderr)
-        return 1
+    config.server_url = url or default_url
 
     # Derive stream name
     if not config.stream:

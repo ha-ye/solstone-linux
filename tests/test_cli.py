@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from solstone_linux import cli as cli_module
-from solstone_linux.cli import cmd_install_service, cmd_setup
-from solstone_linux.config import Config
+from solstone_linux.cli import _cmd_setup_interactive, cmd_install_service, cmd_setup
+from solstone_linux.config import Config, DEFAULT_SERVER_URL
 
 
 def _args() -> argparse.Namespace:
@@ -276,7 +276,7 @@ def test_cmd_setup_non_interactive_happy_path(tmp_path: Path):
     assert saved_config.stream == "host-a"
 
 
-def test_cmd_setup_non_interactive_missing_server_url_fails(tmp_path: Path, capsys):
+def test_cmd_setup_non_interactive_defaults_server_url(tmp_path: Path, capsys):
     args = argparse.Namespace(
         server_url=None,
         token=None,
@@ -287,11 +287,115 @@ def test_cmd_setup_non_interactive_missing_server_url_fails(tmp_path: Path, caps
 
     with patch.dict(os.environ, {}, clear=True):
         with patch("solstone_linux.cli.load_config", return_value=config):
-            with patch("solstone_linux.upload.UploadClient.ensure_registered"):
-                assert cmd_setup(args) == 2
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        return_value=True,
+                    ):
+                        assert cmd_setup(args) == 0
 
+    saved_config = save_mock.call_args.args[0]
     captured = capsys.readouterr()
-    assert "--server-url" in captured.err
+    assert saved_config.server_url == DEFAULT_SERVER_URL
+    assert "--server-url" not in captured.err
+    assert "required" not in captured.err
+
+
+def test_cmd_setup_server_url_override_persists(tmp_path: Path):
+    args = argparse.Namespace(
+        server_url="http://192.168.1.50:5015",
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        return_value=True,
+                    ):
+                        assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    assert saved_config.server_url == "http://192.168.1.50:5015"
+
+
+def test_cmd_setup_preserves_existing_server_url(tmp_path: Path):
+    args = argparse.Namespace(
+        server_url=None,
+        token=None,
+        stream_name=None,
+        non_interactive=True,
+    )
+    config = Config(base_dir=tmp_path)
+    config.server_url = "https://saved.example"
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        return_value=True,
+                    ):
+                        assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    assert saved_config.server_url == "https://saved.example"
+
+
+def test_cmd_setup_flagged_interactive_empty_input_defaults(tmp_path: Path):
+    args = argparse.Namespace(
+        server_url=None,
+        token=None,
+        stream_name="host-x",
+        non_interactive=False,
+    )
+    config = Config(base_dir=tmp_path)
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("solstone_linux.cli.load_config", return_value=config):
+            with patch("solstone_linux.cli.save_config") as save_mock:
+                with patch(
+                    "solstone_linux.cli.streams.stream_name", return_value="host-a"
+                ):
+                    with patch("builtins.input", return_value=""):
+                        with patch(
+                            "solstone_linux.upload.UploadClient.ensure_registered",
+                            return_value=True,
+                        ):
+                            assert cmd_setup(args) == 0
+
+    saved_config = save_mock.call_args.args[0]
+    assert saved_config.server_url == DEFAULT_SERVER_URL
+
+
+def test_cmd_setup_interactive_legacy_empty_input_defaults(tmp_path: Path):
+    config = Config(base_dir=tmp_path)
+
+    with patch("solstone_linux.cli.load_config", return_value=config):
+        with patch("solstone_linux.cli.save_config") as save_mock:
+            with patch("solstone_linux.cli.stream_name", return_value="host-a"):
+                with patch("builtins.input", return_value=""):
+                    with patch(
+                        "solstone_linux.upload.UploadClient.ensure_registered",
+                        return_value=True,
+                    ):
+                        assert _cmd_setup_interactive() == 0
+
+    saved_config = save_mock.call_args.args[0]
+    assert saved_config.server_url == DEFAULT_SERVER_URL
 
 
 def test_cmd_setup_env_token_fallback(tmp_path: Path, capsys):

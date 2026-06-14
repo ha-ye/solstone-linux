@@ -20,6 +20,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_DIR = Path.home() / ".local" / "share" / "solstone-linux"
+DEFAULT_SERVER_URL = "http://localhost:5015"
 DEFAULT_SEGMENT_INTERVAL = 300
 DEFAULT_SYNC_RETRY_DELAYS = [5, 30, 120, 300]
 DEFAULT_SYNC_MAX_RETRIES = 10
