@@ -4,6 +4,15 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+- setup is now genuinely promptless. removed the residual `Solstone journal URL`
+  input prompt that the interactive and flag setup paths still showed; setup now
+  defaults silently to the local link at `http://localhost:5015`, matching the
+  0.3.0 changelog. `solstone-linux setup --server-url <url>` still points at a
+  journal you reach directly.
+
 ## [0.3.1] - 2026-06-15
 
 ### Changed

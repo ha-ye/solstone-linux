@@ -93,11 +93,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     config = load_config()
 
-    server_url = getattr(args, "server_url", None) or config.server_url
-    if not server_url and not non_interactive:
-        url = input(f"Solstone journal URL [{DEFAULT_SERVER_URL}]: ").strip()
-        server_url = url or DEFAULT_SERVER_URL
-    server_url = server_url or DEFAULT_SERVER_URL
+    # Resolve the journal URL: an explicit --server-url wins, then any saved
+    # URL, otherwise the local link default. Under pure-PL the journal is
+    # reached over the localhost link, so no URL needs to be typed.
+    server_url = (
+        getattr(args, "server_url", None) or config.server_url or DEFAULT_SERVER_URL
+    )
     config.server_url = server_url
 
     stream_override = getattr(args, "stream_name", None)
@@ -157,10 +158,11 @@ def _cmd_setup_interactive() -> int:
 
     config = load_config()
 
-    # Prompt for server URL
-    default_url = config.server_url or DEFAULT_SERVER_URL
-    url = input(f"Solstone journal URL [{default_url}]: ").strip()
-    config.server_url = url or default_url
+    # No prompt: default to the local link. Under pure-PL the journal is reached
+    # over the localhost link, so no URL needs to be typed; a saved URL (or
+    # `solstone-linux setup --server-url <url>`) points at a journal reached
+    # directly.
+    config.server_url = config.server_url or DEFAULT_SERVER_URL
 
     # Derive stream name
     if not config.stream:

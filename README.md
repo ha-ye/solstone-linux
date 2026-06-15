@@ -38,7 +38,7 @@ solstone-linux install-service
 solstone-linux setup
 ```
 
-`setup` prompts for your journal URL and registers the observer for you. If this machine can't reach your solstone host directly, mint a key from there with `sol observer create <name>` and paste it during setup.
+`setup` registers the observer against your journal over the local `http://localhost:5015` link, so there's no URL to type. If this machine reaches your solstone host directly instead, run `solstone-linux setup --server-url <journal-url>`. (Legacy fallback: mint a key on the journal host with `journal observer create <name>` and paste it during setup.)
 
 ### Developers building from source
 

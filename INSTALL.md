@@ -4,7 +4,7 @@ these instructions are for a coding agent and human working together. solstone-l
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
-> **most users install solstone-linux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-linux`, `solstone-linux install-service`, then `solstone-linux setup` (which prompts for your journal URL and auto-registers). if the observer machine can't reach your solstone host, mint a key from there first with `sol observer create <name>` and paste it during setup. the instructions below are for developers building from source or troubleshooting the install.
+> **most users install solstone-linux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-linux`, `solstone-linux install-service`, then `solstone-linux setup` (which registers against your journal over the local `http://localhost:5015` link — no URL to type). if the observer machine reaches your solstone host directly instead, run `solstone-linux setup --server-url <journal-url>`. the instructions below are for developers building from source or troubleshooting the install.
 
 ## before you begin
 
@@ -14,7 +14,7 @@ check if solstone-linux is already installed and running:
 
 ```
 systemctl --user status solstone-linux
-sol remote list
+journal observer list
 ```
 
 if it's already active and connected, you're done.
@@ -24,12 +24,12 @@ if it's already active and connected, you're done.
 - **system dependencies.** the observer needs PyGObject, GStreamer, and PipeWire bindings from system packages. installing these requires sudo.
 - **stream name.** this identifies this observer's stream. the machine's hostname is the typical choice.
 
-### remote sol
+### journal reached directly (not over the local link)
 
-The observer connects to your solstone journal over HTTPS — colocation is optional. For remote-sol setups:
+By default the observer registers over the local `http://localhost:5015` link, so the journal and observer are colocated. If you reach your journal directly over HTTPS instead:
 
 - clone anywhere; the `$(sol root)/observers` path in step 2 only applies when sol is installed locally.
-- `solstone-linux setup` will prompt for the journal URL (since local `sol remote list` isn't available) and auto-register the observer with your journal via HTTP, persisting the returned key. No manual key handoff is needed if the journal's observer-registration endpoint is reachable.
+- run `solstone-linux setup --server-url <journal-url>` to point at that journal and auto-register the observer over HTTP, persisting the returned key. No manual key handoff is needed if the journal's observer-registration endpoint is reachable.
 - otherwise, the install sequence below is the same.
 
 ## install sequence
@@ -66,7 +66,7 @@ this is the developer/from-source path; most installs should use the `pipx insta
 
    `uv` / `pipx`: Fedora packages both (`sudo dnf install uv pipx`); Debian/Ubuntu package `pipx` but not `uv`. the PyPI install flow only needs `pipx` — `uv` is optional and used by the from-source dev workflow in the Makefile.
 
-2. cloning into `$(sol root)/observers` is only a developer convenience for keeping observer checkouts colocated with a local solstone clone. for remote-sol setups, clone anywhere — the observer runs independently of your journal at runtime:
+2. cloning into `$(sol root)/observers` is only a developer convenience for keeping observer checkouts colocated with a local solstone clone. for a journal you reach directly, clone anywhere — the observer runs independently of your journal at runtime:
    ```
    cd "$(sol root)/observers"
    git clone https://github.com/solpbc/solstone-linux.git
@@ -75,11 +75,11 @@ this is the developer/from-source path; most installs should use the `pipx insta
    ```
    `make install-service` is a smart install-or-upgrade: detects fresh-install vs upgrade via a marker file, runs CI in upgrade mode, guards against cross-repo contamination.
 
-3. run the interactive setup:
+3. run setup:
    ```
    solstone-linux setup
    ```
-   this prompts for the journal URL and registers the observer with your journal.
+   this registers the observer against your journal over the local `http://localhost:5015` link — no URL to type. pass `--server-url <journal-url>` for a journal you reach directly.
 
 4. verify the service is running:
    ```
