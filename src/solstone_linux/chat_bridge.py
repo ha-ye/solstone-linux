@@ -392,7 +392,7 @@ async def run_chat_bridge(config: Config, stop_event: asyncio.Event) -> None:
 
         server_url = config.server_url.rstrip("/")
         key = config.key
-        sse_url = f"{server_url}/app/observer/{key}/callosum"
+        sse_url = f"{server_url}/app/observer/callosum"
         pending: OrderedDict[str, PendingRequest] = OrderedDict()
         opt_in_state = {"value": False}
         opt_in_task = asyncio.create_task(

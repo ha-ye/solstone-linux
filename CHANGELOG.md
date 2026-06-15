@@ -4,6 +4,12 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.3.1] - 2026-06-15
+
+### Changed
+- chat notifications now use the journal's current callosum connection path,
+  with the observer key still sent in the authorization header.
+
 ## [0.3.0] - 2026-06-14
 
 setup is now zero-config: the observer connects to your journal automatically,

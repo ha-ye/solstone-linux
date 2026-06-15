@@ -538,6 +538,32 @@ async def test_chat_bridge_enabled_false_no_sse_attempt():
     get.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_chat_bridge_uses_keyless_callosum_url_with_bearer():
+    stop_event = asyncio.Event()
+    seen = {}
+
+    def worker(url, key, queue, loop, thread_stop):
+        seen["url"] = url
+        seen["key"] = key
+        loop.call_soon_threadsafe(
+            queue.put_nowait, {"_transport_error": True, "error": "stop"}
+        )
+
+    async def fake_sleep(_delay):
+        stop_event.set()
+
+    with patch("solstone_linux.chat_bridge._sse_worker", new=worker):
+        with patch("solstone_linux.chat_bridge._opt_in_poll_loop", new=_never_poll):
+            with patch("solstone_linux.chat_bridge.asyncio.sleep", new=fake_sleep):
+                await run_chat_bridge(_config(), stop_event)
+
+    assert seen == {
+        "url": "https://server.test/app/observer/callosum",
+        "key": "key-123",
+    }
+
+
 def test_observer_bridge_task_none_when_disabled():
     import inspect
 
