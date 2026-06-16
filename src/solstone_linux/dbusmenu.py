@@ -86,6 +86,8 @@ class DBusMenu(ServiceInterface):
 
     def __init__(self):
         super().__init__("com.canonical.dbusmenu")
+        self.on_about_to_show = None
+        self._props_emitted = 0
         self._revision = 1
         self._root = MenuItem()  # id 0 is root
         self._root.id = 0
@@ -106,6 +108,7 @@ class DBusMenu(ServiceInterface):
             return
 
         updated = {name: self._property_variant(item, name) for name in names}
+        self._props_emitted += 1
         self.ItemsPropertiesUpdated([[item.id, updated]], [])
 
     def _register_items(self, items: list[MenuItem]):
@@ -198,11 +201,16 @@ class DBusMenu(ServiceInterface):
 
     @method()
     def AboutToShow(self, item_id: "i") -> "b":
-        return False  # GetLayout always returns fresh state; no pending unsignaled changes.
+        if self.on_about_to_show is None:
+            return False
+        return bool(self.on_about_to_show())
 
     @method()
     def AboutToShowGroup(self, ids: "ai") -> "aiai":
-        return [[], []]  # no updates, no errors
+        if self.on_about_to_show is None:
+            return [[], []]
+        changed = bool(self.on_about_to_show())
+        return [list(ids), []] if changed else [[], []]
 
     # ── D-Bus Properties ──
 

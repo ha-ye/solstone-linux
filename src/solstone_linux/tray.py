@@ -160,9 +160,10 @@ class TrayApp:
 
         return True
 
-    def update(self):
+    def update(self, force_stats=False):
         """Read observer state and update tray display."""
         obs = self._observer
+        now = time.monotonic()
 
         # Determine status
         if obs._paused:
@@ -178,18 +179,17 @@ class TrayApp:
         if obs._paused or obs.segment_dir is None:
             segment_timer = 0
         else:
-            remaining = obs.interval - (time.monotonic() - obs.start_at_mono)
+            remaining = obs.interval - (now - obs.start_at_mono)
             segment_timer = max(0, int(remaining))
 
         # Pause remaining
         if not obs._paused or obs._pause_until <= 0:
             pause_remaining = 0
         else:
-            pause_remaining = max(0, int(obs._pause_until - time.monotonic()))
+            pause_remaining = max(0, int(obs._pause_until - now))
 
         # Compute stats (throttled — filesystem walk every 60s)
-        now = time.monotonic()
-        if now - self._last_stats_time >= 60:
+        if force_stats or now - self._last_stats_time >= 60:
             self._last_stats_time = now
             captures_today = 0
             total_size = 0
@@ -220,7 +220,7 @@ class TrayApp:
                 pass
 
             total_size_mb = int(total_size / (1024 * 1024))
-            uptime_seconds = int(time.monotonic() - obs._start_mono)
+            uptime_seconds = int(now - obs._start_mono)
 
             self.stats = {
                 "captures_today": captures_today,
@@ -233,6 +233,19 @@ class TrayApp:
         self._update_header(pause_remaining, health)
         self._update_live_stats(segment_timer, pause_remaining)
         self.paused_remaining = pause_remaining
+
+    def _on_about_to_show(self) -> bool:
+        """Full recompute on menu open; returns True if any item changed.
+
+        Runs outside _refresh_tray so a failure here never tears down the tray.
+        """
+        before = self.menu._props_emitted
+        try:
+            self.update(force_stats=True)
+        except Exception:
+            log.warning("Tray on-open recompute failed", exc_info=True)
+            return False
+        return self.menu._props_emitted > before
 
     def _build_menu(self):
         """Build the full tray menu structure."""
@@ -361,6 +374,7 @@ class TrayApp:
                 service_hint,
             ]
         )
+        self.menu.on_about_to_show = self._on_about_to_show
 
     def _icon_for_health(self, status: str, health: SyncHealth) -> str:
         if self.error:
@@ -420,6 +434,7 @@ class TrayApp:
         self._status_header.label = label
         self._status_item.label = label
         self.menu.update_properties(self._status_header, "label")
+        self.menu.update_properties(self._status_item, "label")
 
     def _update_sync(self, health: SyncHealth):
         """Update sync status display."""
@@ -427,6 +442,7 @@ class TrayApp:
             return
         self.health = health
         self._sync_item.label = health.sync_line
+        self.menu.update_properties(self._sync_item, "label")
 
         if not self.error:
             self.sni.set_icon(self._icon_for_health(self.status, health))
@@ -446,6 +462,7 @@ class TrayApp:
         new_label = f"segment: {mins}:{secs:02d} remaining"
         if self._segment_item.label != new_label:
             self._segment_item.label = new_label
+            self.menu.update_properties(self._segment_item, "label")
 
         # Stats (computed in update())
         if self.stats:
@@ -462,10 +479,13 @@ class TrayApp:
 
             if self._cache_item.label != new_cache:
                 self._cache_item.label = new_cache
+                self.menu.update_properties(self._cache_item, "label")
             if self._captures_item.label != new_captures:
                 self._captures_item.label = new_captures
+                self.menu.update_properties(self._captures_item, "label")
             if self._uptime_item.label != new_uptime:
                 self._uptime_item.label = new_uptime
+                self.menu.update_properties(self._uptime_item, "label")
 
         # Update pause remaining in resume button
         if self.status == "paused" and pause_remaining > 0:
@@ -473,6 +493,7 @@ class TrayApp:
             new_resume = f"resume ({pr_mins}m remaining)"
             if self._resume_item.label != new_resume:
                 self._resume_item.label = new_resume
+                self.menu.update_properties(self._resume_item, "label")
 
     def _build_tooltip(self, health: SyncHealth | None = None) -> str:
         """Build plain-text tooltip body (cross-DE compatible)."""

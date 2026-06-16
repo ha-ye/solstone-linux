@@ -2,6 +2,7 @@
 # Copyright (c) 2026 sol pbc
 
 import time
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import call
 from unittest.mock import MagicMock
@@ -10,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from solstone_linux.config import Config
-from solstone_linux.dbusmenu import MenuItem, separator
+from solstone_linux.dbusmenu import DBusMenu, MenuItem, separator
 from solstone_linux.sni import StatusNotifierItem
 from solstone_linux.sync_health import ErrorType, HealthState, SyncFacts, derive_health
 from solstone_linux.tray import (
@@ -58,6 +59,28 @@ def _syncing_health(progress="3/10 segments"):
 
 def _offline_health():
     return _health(SyncFacts(last_error_class=ErrorType.TRANSIENT))
+
+
+def _create_capture_segment(app, size=1024 * 1024):
+    today = datetime.now().strftime("%Y%m%d")
+    segment_dir = app.config.captures_dir / today / "test-stream" / "120000_300"
+    segment_dir.mkdir(parents=True)
+    (segment_dir / "screen.mp4").write_bytes(b"x" * size)
+    return segment_dir
+
+
+def _prepare_open_refresh_state(app, now):
+    segment_dir = _create_capture_segment(app)
+    app._observer.current_mode = "screencast"
+    app._observer._paused = False
+    app._observer.segment_dir = segment_dir
+    app._observer.start_at_mono = now - 75
+    app._observer._start_mono = now - 3661
+    app._observer.interval = 300
+    app._observer._sync = MagicMock()
+    app._observer._sync.health = _connected_health()
+    app._last_stats_time = now - 10
+    return segment_dir
 
 
 class TestResolveIconThemePath:
@@ -158,6 +181,22 @@ class TestUpdateStatus:
 
 
 class TestUpdateSync:
+    def test_update_sync_signals_label_change_only_once(self):
+        app = _make_app()
+        app._build_menu()
+        app.menu.update_properties = MagicMock()
+        health = _connected_health()
+
+        app._update_sync(health)
+
+        app.menu.update_properties.assert_called_once_with(app._sync_item, "label")
+
+        app.menu.update_properties.reset_mock()
+
+        app._update_sync(health)
+
+        app.menu.update_properties.assert_not_called()
+
     def test_update_sync_synced(self):
         app = _make_app()
         app._build_menu()
@@ -223,9 +262,37 @@ class TestUpdateLiveStats:
         }
 
         app._update_live_stats(245, 0)
+
+        assert app.menu.update_properties.call_args_list == [
+            call(app._segment_item, "label"),
+            call(app._cache_item, "label"),
+            call(app._captures_item, "label"),
+            call(app._uptime_item, "label"),
+        ]
+
         app.menu.update_properties.reset_mock()
 
         app._update_live_stats(245, 0)
+
+        app.menu.update_properties.assert_not_called()
+
+    def test_update_live_stats_signals_resume_countdown_change_only_once(self):
+        app = _make_app()
+        app._build_menu()
+        app.status = "paused"
+        app._segment_item.label = "segment: 0:00 remaining"
+        app.menu.update_properties = MagicMock()
+
+        app._update_live_stats(0, 600)
+
+        app.menu.update_properties.assert_called_once_with(
+            app._resume_item,
+            "label",
+        )
+
+        app.menu.update_properties.reset_mock()
+
+        app._update_live_stats(0, 600)
 
         app.menu.update_properties.assert_not_called()
 
@@ -243,8 +310,21 @@ class TestHeaderLabel:
 
         app._update_header(0, _connected_health())
 
-        app.menu.update_properties.assert_called_with(app._status_header, "label")
+        assert (
+            call(app._status_header, "label")
+            in app.menu.update_properties.call_args_list
+        )
+        assert (
+            call(app._status_item, "label") in app.menu.update_properties.call_args_list
+        )
         assert app._status_header.label == "observing — connected"
+        assert app._status_item.label == "observing — connected"
+
+        app.menu.update_properties.reset_mock()
+
+        app._update_header(0, _connected_health())
+
+        app.menu.update_properties.assert_not_called()
 
     def test_header_recording_connected(self):
         app = _make_app()
@@ -354,6 +434,73 @@ class TestStatusNotifierItem:
 
 
 class TestUpdate:
+    def test_on_about_to_show_forces_recompute(self, tmp_path):
+        app = _make_app(tmp_path)
+        app._build_menu()
+        now = 10_000.0
+        _prepare_open_refresh_state(app, now)
+
+        with patch("solstone_linux.tray.time.monotonic", return_value=now):
+            changed = app._on_about_to_show()
+
+        assert changed is True
+        assert app.stats == {
+            "captures_today": 1,
+            "total_size_mb": 1,
+            "uptime_seconds": 3661,
+        }
+        assert app._segment_item.label == "segment: 3:45 remaining"
+        assert app._cache_item.label == "cache: 1 MB"
+        assert app._captures_item.label == "captures today: 1 segments"
+        assert app._uptime_item.label == "uptime: 1h 1m"
+        assert app._sync_item.label == "sync: up to date"
+        assert app._status_item.label == "observing — connected"
+
+    def test_about_to_show_returns_true_and_layout_has_refreshed_labels(self, tmp_path):
+        app = _make_app(tmp_path)
+        app._build_menu()
+        now = 10_000.0
+        _prepare_open_refresh_state(app, now)
+
+        with patch("solstone_linux.tray.time.monotonic", return_value=now):
+            assert DBusMenu.AboutToShow.__wrapped__(app.menu, 0) is True
+
+        row_items = [
+            app._status_item,
+            app._sync_item,
+            app._segment_item,
+            app._cache_item,
+            app._captures_item,
+            app._uptime_item,
+        ]
+        props_by_id = {
+            item_id: props
+            for item_id, props in DBusMenu.GetGroupProperties.__wrapped__(
+                app.menu,
+                [item.id for item in row_items],
+                [],
+            )
+        }
+
+        for item in row_items:
+            assert props_by_id[item.id]["label"].value == item.label
+
+    def test_on_about_to_show_failure_keeps_tray_and_last_known_layout(self):
+        app = _make_app()
+        app._build_menu()
+        app._observer._tray = app
+        app.update = MagicMock(side_effect=RuntimeError("boom"))
+
+        assert app._on_about_to_show() is False
+        assert app._observer._tray is app
+
+        props = DBusMenu.GetGroupProperties.__wrapped__(
+            app.menu,
+            [app._status_item.id],
+            [],
+        )
+        assert props[0][1]["label"].value == "observing"
+
     def test_first_update_clears_starting_tooltip(self):
         """Tray tooltip must not stay on 'starting...' after first update."""
         app = _make_app()

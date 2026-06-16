@@ -4,6 +4,11 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.3.3] - 2026-06-16
+
+### Fixed
+- the tray status submenu now refreshes its values every time you open it. the segment countdown, cache size, captures today, uptime, and sync line had been showing stale values on reopen on some desktops; they now reflect the current state each time you open the menu.
+
 ## [0.3.2] - 2026-06-16
 
 ### Changed

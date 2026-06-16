@@ -55,6 +55,7 @@ def test_update_properties_emits_items_properties_updated():
     menu.ItemsPropertiesUpdated.assert_called_once()
     menu.LayoutUpdated.assert_not_called()
     assert menu._revision == revision
+    assert menu._props_emitted == 1
 
     updated_props, removed_props = menu.ItemsPropertiesUpdated.call_args.args
     assert removed_props == []
@@ -79,9 +80,29 @@ def test_update_properties_noop_when_no_names():
     menu.ItemsPropertiesUpdated.assert_not_called()
     menu.LayoutUpdated.assert_not_called()
     assert menu._revision == revision
+    assert menu._props_emitted == 0
 
 
-def test_about_to_show_returns_false():
+def test_about_to_show_uses_optional_hook():
     menu = DBusMenu()
 
     assert DBusMenu.AboutToShow.__wrapped__(menu, 0) is False
+
+    menu.on_about_to_show = lambda: True
+    assert DBusMenu.AboutToShow.__wrapped__(menu, 0) is True
+
+    menu.on_about_to_show = lambda: False
+    assert DBusMenu.AboutToShow.__wrapped__(menu, 0) is False
+
+
+def test_about_to_show_group_uses_optional_hook():
+    menu = DBusMenu()
+    ids = [1, 2, 3]
+
+    assert DBusMenu.AboutToShowGroup.__wrapped__(menu, ids) == [[], []]
+
+    menu.on_about_to_show = lambda: True
+    assert DBusMenu.AboutToShowGroup.__wrapped__(menu, ids) == [ids, []]
+
+    menu.on_about_to_show = lambda: False
+    assert DBusMenu.AboutToShowGroup.__wrapped__(menu, ids) == [[], []]
