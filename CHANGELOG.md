@@ -4,22 +4,13 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
-## [Unreleased]
+## [0.3.2] - 2026-06-16
 
 ### Changed
-- Sync health now fails closed across tray, CLI, doctor, and D-Bus: `connected`
-  is shown only after an earned successful journal check with no pending
-  segments. Query failures are classified, including 404 as update-needed,
-  health facts persist across restart, stale sync is based on last successful
-  journal contact, and the misleading synced-days comfort metric is no longer
-  displayed.
+- the tray status now tells the truth about sync. it shows "connected" only when this observer has genuinely reached your journal with nothing left to send, and clearly says when it's offline, needs updating, or needs to re-authorize, instead of looking fine while quietly falling behind. the same honest status carries across the tray, `status`, and `doctor`.
 
 ### Fixed
-- setup is now genuinely promptless. removed the residual `Solstone journal URL`
-  input prompt that the interactive and flag setup paths still showed; setup now
-  defaults silently to the local link at `http://localhost:5015`, matching the
-  0.3.0 changelog. `solstone-linux setup --server-url <url>` still points at a
-  journal you reach directly.
+- setup no longer asks for a journal url under any path. if you ran into a lingering "journal url" prompt during setup, that's gone — setup connects to your local journal automatically, and `solstone-linux setup --server-url <url>` still points at a journal you reach directly.
 
 ## [0.3.1] - 2026-06-15
 
