@@ -11,6 +11,7 @@ from dbus_next.service import ServiceInterface
 from solstone_linux.config import Config
 from solstone_linux.dbus_service import ObserverService
 from solstone_linux.sync import SyncService
+from solstone_linux.sync_health import SyncFacts
 from solstone_linux.upload import UploadClient
 
 
@@ -178,15 +179,13 @@ class TestGetStats:
         (segment_dir / "audio.flac").write_bytes(b"x" * (1024 * 1024))
 
         observer = _make_observer(captures_dir)
-        observer._sync = MagicMock()
-        observer._sync._synced_days = {"20260410", "20260411"}
         service = ObserverService(observer)
 
         stats = _call_method(service, "GetStats")
 
         assert stats["captures_today"].value == 1
         assert stats["total_size_mb"].value == 1
-        assert stats["synced_days"].value == 2
+        assert "synced_days" not in stats
         assert stats["uptime_seconds"].value >= 0
 
     def test_empty_captures(self, tmp_path: Path):
@@ -197,7 +196,7 @@ class TestGetStats:
 
         assert stats["captures_today"].value == 0
         assert stats["total_size_mb"].value == 0
-        assert stats["synced_days"].value == 0
+        assert "synced_days" not in stats
 
     def test_counts_today_only(self, tmp_path: Path):
         captures_dir = tmp_path / "captures"
@@ -226,21 +225,21 @@ class TestSyncStatusTracking:
 
         sync = SyncService(config, client)
 
-        assert sync.sync_status == "synced"
-        assert sync.sync_progress == ""
+        assert sync.health.state.value == "unknown"
+        assert sync.progress == ""
 
-    def test_set_sync_status(self, tmp_path: Path):
+    def test_progress_drives_syncing_status(self, tmp_path: Path):
         config = Config(base_dir=tmp_path)
         config.ensure_dirs()
         client = UploadClient(config)
 
         sync = SyncService(config, client)
-        sync._set_sync_status("uploading", "uploading 120000_300")
+        sync._facts = SyncFacts(in_progress=True, progress="uploading 120000_300")
 
-        assert sync.sync_status == "uploading"
-        assert sync.sync_progress == "uploading 120000_300"
+        assert sync.health.state.value == "syncing"
+        assert sync.progress == "uploading 120000_300"
 
-    def test_set_sync_status_emits_signal(self, tmp_path: Path):
+    def test_progress_change_emits_signal(self, tmp_path: Path):
         config = Config(base_dir=tmp_path)
         config.ensure_dirs()
         client = UploadClient(config)
@@ -248,10 +247,10 @@ class TestSyncStatusTracking:
         sync = SyncService(config, client)
         sync._dbus_service = MagicMock()
 
-        sync._set_sync_status("retrying", "30s until probe")
+        sync._set_progress("30s until probe")
 
         sync._dbus_service.SyncProgressChanged.assert_called_once_with(
-            "retrying:30s until probe"
+            "syncing:30s until probe"
         )
 
 

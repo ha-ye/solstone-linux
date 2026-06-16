@@ -8,8 +8,14 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from solstone_linux import cli as cli_module
-from solstone_linux.cli import _cmd_setup_interactive, cmd_install_service, cmd_setup
+from solstone_linux.cli import (
+    _cmd_setup_interactive,
+    cmd_install_service,
+    cmd_setup,
+    cmd_status,
+)
 from solstone_linux.config import Config, DEFAULT_SERVER_URL
+from solstone_linux.sync_health import ErrorType, SyncFacts, save_facts
 
 
 def _args() -> argparse.Namespace:
@@ -33,6 +39,29 @@ def _is_dir_without_icons(self: Path) -> bool:
     if self == icon_source:
         return False
     return _REAL_IS_DIR(self)
+
+
+def test_cmd_status_prints_sync_health(tmp_path: Path, monkeypatch, capsys):
+    config = Config(
+        base_dir=tmp_path,
+        server_url="https://test.example.com",
+        key="K123456789",
+        stream="test-stream",
+    )
+    config.ensure_dirs()
+    save_facts(config.state_dir, SyncFacts(last_error_class=ErrorType.TRANSIENT))
+    monkeypatch.setattr(cli_module, "load_config", lambda: config)
+    monkeypatch.setattr(
+        cli_module.subprocess,
+        "run",
+        MagicMock(return_value=MagicMock(stdout="active\n")),
+    )
+
+    assert cmd_status(_args()) == 0
+
+    out = capsys.readouterr().out
+    assert "Sync: offline — saving locally; pending unconfirmed (will retry)" in out
+    assert "Synced:" not in out
 
 
 def test_cmd_install_service_uses_environment_path(tmp_path: Path):

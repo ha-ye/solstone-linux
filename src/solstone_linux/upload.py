@@ -17,7 +17,6 @@ import logging
 import platform
 import socket
 import time
-from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -25,6 +24,7 @@ import requests
 
 from . import __version__
 from .config import Config
+from .sync_health import ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +36,16 @@ def _auth_headers(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-class ErrorType(Enum):
-    """Classification of upload errors for circuit breaker tuning."""
-
-    AUTH = "auth"  # 401, 403 — open circuit immediately
-    CLIENT = "client"  # 400 — non-retryable, don't count for circuit
-    TRANSIENT = "transient"  # 5xx, network, timeout — allow more failures
-
-
 class UploadResult(NamedTuple):
     success: bool
     duplicate: bool = False
     error_type: ErrorType | None = None
+
+
+class QueryResult(NamedTuple):
+    segments: list[dict] | None
+    error_type: ErrorType | None = None
+    status_code: int | None = None
 
 
 class UploadClient:
@@ -139,6 +137,8 @@ class UploadClient:
             return ErrorType.AUTH
         if status_code == 400:
             return ErrorType.CLIENT
+        if status_code == 404:
+            return ErrorType.INCOMPATIBLE
         # 5xx and anything else
         return ErrorType.TRANSIENT
 
@@ -151,7 +151,7 @@ class UploadClient:
         """Upload a segment's files to the ingest server."""
         if self._revoked or not self._key or not self._url:
             return UploadResult(
-                False, error_type=ErrorType.AUTH if self._revoked else None
+                False, error_type=ErrorType.AUTH if self._revoked else ErrorType.CLIENT
             )
 
         url = f"{self._url}/app/observer/ingest"
@@ -199,7 +199,7 @@ class UploadClient:
                     )
                     return UploadResult(False, error_type=error_type)
 
-                if error_type == ErrorType.CLIENT:
+                if error_type in (ErrorType.CLIENT, ErrorType.INCOMPATIBLE):
                     logger.error(
                         f"Upload rejected ({response.status_code}): {response.text}"
                     )
@@ -228,13 +228,15 @@ class UploadClient:
         )
         return UploadResult(False, error_type=error_type)
 
-    def get_server_segments(self, day: str) -> list[dict] | None:
+    def get_server_segments(self, day: str) -> QueryResult:
         """Query server for segments on a given day.
 
-        Returns list of segment dicts, or None on failure.
+        Returns segment dicts on success, with error details on failure.
         """
-        if self._revoked or not self._key or not self._url:
-            return None
+        if self._revoked:
+            return QueryResult(None, ErrorType.AUTH, None)
+        if not self._key or not self._url:
+            return QueryResult(None, ErrorType.CLIENT, None)
 
         url = f"{self._url}/app/observer/ingest/segments/{day}"
 
@@ -243,17 +245,17 @@ class UploadClient:
                 url, headers=_auth_headers(self._key), timeout=EVENT_TIMEOUT
             )
             if resp.status_code == 200:
-                return resp.json()
-            if resp.status_code in (401, 403):
+                return QueryResult(resp.json(), None, resp.status_code)
+            error_type = self.classify_error(resp.status_code)
+            if error_type == ErrorType.AUTH:
                 if resp.status_code == 403:
                     self._revoked = True
                 logger.error(f"Segments query rejected ({resp.status_code})")
-                return None
             logger.warning(f"Segments query failed: {resp.status_code}")
-            return None
+            return QueryResult(None, error_type, resp.status_code)
         except requests.RequestException as e:
             logger.debug(f"Segments query failed: {e}")
-            return None
+            return QueryResult(None, ErrorType.TRANSIENT, None)
 
     def relay_event(self, tract: str, event: str, **fields: Any) -> bool:
         """Fire-and-forget event relay."""

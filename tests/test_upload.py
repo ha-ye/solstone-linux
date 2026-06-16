@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from solstone_linux.config import Config, load_config
+from solstone_linux.sync_health import ErrorType
 from solstone_linux.upload import UploadClient
 
 
@@ -110,10 +111,27 @@ def test_get_server_segments_uses_bearer_and_keyless_route(tmp_path: Path):
     client._session = MagicMock()
     client._session.get.return_value = MagicMock(status_code=200, json=lambda: [])
 
-    assert client.get_server_segments("20260101") == []
+    result = client.get_server_segments("20260101")
+
+    assert result.segments == []
+    assert result.error_type is None
+    assert result.status_code == 200
 
     call = client._session.get.call_args
     assert call.args[0].endswith("/app/observer/ingest/segments/20260101")
     assert call.kwargs["headers"] == {"Authorization": "Bearer K"}
     params = call.kwargs.get("params")
     assert params is None or "stream" not in params
+
+
+def test_get_server_segments_classifies_404_as_incompatible(tmp_path: Path):
+    config = Config(base_dir=tmp_path, server_url="http://localhost:9999", key="K")
+    client = UploadClient(config)
+    client._session = MagicMock()
+    client._session.get.return_value = MagicMock(status_code=404)
+
+    result = client.get_server_segments("20260101")
+
+    assert result.segments is None
+    assert result.error_type == ErrorType.INCOMPATIBLE
+    assert result.status_code == 404

@@ -24,6 +24,7 @@ DEFAULT_SERVER_URL = "http://localhost:5015"
 DEFAULT_SEGMENT_INTERVAL = 300
 DEFAULT_SYNC_RETRY_DELAYS = [5, 30, 120, 300]
 DEFAULT_SYNC_MAX_RETRIES = 10
+DEFAULT_SYNC_STALE_THRESHOLD = 600
 
 
 @dataclass
@@ -38,6 +39,7 @@ class Config:
         default_factory=lambda: list(DEFAULT_SYNC_RETRY_DELAYS)
     )
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
+    sync_stale_threshold: int = DEFAULT_SYNC_STALE_THRESHOLD
     cache_retention_days: int = 7
     chat_bridge_enabled: bool = True
     capture_framerate: int = 1
@@ -98,6 +100,12 @@ def load_config(base_dir: Path | None = None) -> Config:
     if "sync_max_retries" in data:
         config.sync_max_retries = data["sync_max_retries"]
     try:
+        config.sync_stale_threshold = int(
+            data.get("sync_stale_threshold", DEFAULT_SYNC_STALE_THRESHOLD)
+        )
+    except (TypeError, ValueError):
+        config.sync_stale_threshold = DEFAULT_SYNC_STALE_THRESHOLD
+    try:
         config.cache_retention_days = int(data.get("cache_retention_days", 7))
     except (TypeError, ValueError):
         config.cache_retention_days = 7
@@ -120,6 +128,7 @@ def save_config(config: Config) -> None:
         "segment_interval": config.segment_interval,
         "sync_retry_delays": config.sync_retry_delays,
         "sync_max_retries": config.sync_max_retries,
+        "sync_stale_threshold": config.sync_stale_threshold,
         "cache_retention_days": config.cache_retention_days,
         "chat_bridge_enabled": config.chat_bridge_enabled,
         "capture_framerate": config.capture_framerate,

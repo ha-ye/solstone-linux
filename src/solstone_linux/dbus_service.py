@@ -38,13 +38,13 @@ class ObserverService(ServiceInterface):
     @dbus_property(access=PropertyAccess.READ)
     def SyncStatus(self) -> "s":
         if self._observer._sync:
-            return self._observer._sync.sync_status
-        return "synced"
+            return self._observer._sync.health.state.value
+        return "unknown"
 
     @dbus_property(access=PropertyAccess.READ)
     def SyncProgress(self) -> "s":
         if self._observer._sync:
-            return self._observer._sync.sync_progress
+            return self._observer._sync.progress
         return ""
 
     @dbus_property(access=PropertyAccess.READ)
@@ -122,17 +122,12 @@ class ObserverService(ServiceInterface):
         except OSError:
             pass
 
-        synced_days = 0
-        if self._observer._sync:
-            synced_days = len(self._observer._sync._synced_days)
-
         total_size_mb = int(total_size / (1024 * 1024))
         uptime_seconds = int(time.monotonic() - self._observer._start_mono)
 
         return {
             "captures_today": Variant("i", captures_today),
             "total_size_mb": Variant("i", total_size_mb),
-            "synced_days": Variant("i", synced_days),
             "uptime_seconds": Variant("i", uptime_seconds),
         }
 

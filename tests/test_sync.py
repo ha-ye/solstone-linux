@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -18,7 +18,14 @@ from solstone_linux.sync import (
     CIRCUIT_COOLDOWN_MAX,
     SyncService,
 )
-from solstone_linux.upload import ErrorType, UploadClient
+from solstone_linux.sync_health import (
+    ErrorType,
+    HealthState,
+    SyncFacts,
+    load_facts,
+    save_facts,
+)
+from solstone_linux.upload import QueryResult, UploadClient
 
 
 class TestRecovery:
@@ -197,6 +204,9 @@ class TestErrorClassification:
     def test_client_errors(self):
         assert UploadClient.classify_error(400) == ErrorType.CLIENT
 
+    def test_incompatible_errors(self):
+        assert UploadClient.classify_error(404) == ErrorType.INCOMPATIBLE
+
     def test_transient_errors(self):
         assert UploadClient.classify_error(500) == ErrorType.TRANSIENT
         assert UploadClient.classify_error(502) == ErrorType.TRANSIENT
@@ -239,6 +249,17 @@ class TestCircuitBreakerThresholds:
         assert sync._circuit_threshold() == CIRCUIT_THRESHOLD_TRANSIENT
         assert CIRCUIT_THRESHOLD_TRANSIENT >= 5
 
+    def test_incompatible_opens_immediately(self, tmp_path: Path):
+        from solstone_linux.sync import SyncService, CIRCUIT_THRESHOLD_AUTH
+
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        sync = SyncService(config, client)
+
+        sync._last_error_type = ErrorType.INCOMPATIBLE
+        assert sync._circuit_threshold() == CIRCUIT_THRESHOLD_AUTH
+
 
 class TestCircuitBreakerRecovery:
     """Test circuit breaker recovery for transient failures."""
@@ -269,7 +290,9 @@ class TestCircuitBreakerRecovery:
         sync._sync = AsyncMock(side_effect=lambda force_full=False: sync.stop())
         sync._trigger.set()
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=[]):
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=QueryResult([])
+        ):
             await sync.run()
 
         assert not sync._circuit_open
@@ -305,7 +328,11 @@ class TestCircuitBreakerRecovery:
         sync._sync = AsyncMock()
         before_probe = time.monotonic()
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=None):
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(None, ErrorType.TRANSIENT),
+        ):
             await self._run_briefly(sync)
 
         assert sync._circuit_open
@@ -325,7 +352,9 @@ class TestCircuitBreakerRecovery:
         sync._sync = AsyncMock(side_effect=lambda force_full=False: sync.stop())
         sync._trigger.set()
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=[]):
+        with patch(
+            "asyncio.to_thread", new_callable=AsyncMock, return_value=QueryResult([])
+        ):
             await sync.run()
 
         assert not sync._circuit_open
@@ -345,7 +374,11 @@ class TestCircuitBreakerRecovery:
         sync._sync = AsyncMock()
         before_probe = time.monotonic()
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=None):
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(None, ErrorType.TRANSIENT),
+        ):
             await self._run_briefly(sync)
 
         assert sync._circuit_open
@@ -369,6 +402,32 @@ class TestCircuitBreakerRecovery:
         to_thread.assert_not_called()
         sync._sync.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_query_failures_recover_to_connected(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._client.get_server_segments = MagicMock(
+            return_value=QueryResult(None, ErrorType.TRANSIENT)
+        )
+
+        for _ in range(5):
+            await sync._sync()
+
+        assert sync._circuit_open
+        assert sync.health.state == HealthState.OFFLINE
+
+        sync._circuit_open_since = time.monotonic() - 31
+        sync._client.get_server_segments = MagicMock(
+            side_effect=[
+                QueryResult([], None, 200),
+                QueryResult([], None, 200),
+            ]
+        )
+
+        await self._run_briefly(sync)
+
+        assert not sync._circuit_open
+        assert sync.health.state == HealthState.CONNECTED
+
 
 class TestRetryCapRespected:
     """Test that upload respects configured retry cap (no hard min(config,3))."""
@@ -385,6 +444,102 @@ class TestRetryCapRespected:
         config.sync_max_retries = 1
         client = UploadClient(config)
         assert client._max_retries == 1
+
+
+class TestSyncHealthFacts:
+    """Test pass-level health fact aggregation."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_segment(
+        self, captures_dir: Path, day: str, stream: str, name: str
+    ) -> Path:
+        seg_dir = captures_dir / day / stream / name
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        (seg_dir / "screen.webm").write_bytes(b"\x00" * 100)
+        return seg_dir
+
+    def test_startup_forces_in_progress_false(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        save_facts(
+            config.state_dir,
+            SyncFacts(in_progress=True, progress="uploading 120000_300"),
+        )
+
+        SyncService(config, UploadClient(config))
+        facts = load_facts(config.state_dir)
+
+        assert facts.in_progress is False
+        assert facts.progress == ""
+
+    @pytest.mark.asyncio
+    async def test_today_success_and_older_404_is_update_needed(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        captures = sync._config.captures_dir
+        older_day = "20260101"
+        today = datetime.now().strftime("%Y%m%d")
+        self._create_segment(captures, older_day, "archon", "120000_300")
+
+        def fake_query(day):
+            if day == today:
+                return QueryResult([], None, 200)
+            return QueryResult(None, ErrorType.INCOMPATIBLE, 404)
+
+        sync._client.get_server_segments = MagicMock(side_effect=fake_query)
+
+        await sync._sync()
+
+        assert sync.health.state == HealthState.UPDATE_NEEDED
+        facts = load_facts(sync._config.state_dir)
+        assert facts.last_error_class == ErrorType.INCOMPATIBLE
+        assert facts.last_error_code == 404
+        assert facts.pending_confirmed is None
+
+    @pytest.mark.asyncio
+    async def test_failed_query_clears_prior_pending_zero(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._facts.pending_confirmed = 0
+        sync._save_health()
+        sync._client.get_server_segments = MagicMock(
+            return_value=QueryResult(None, ErrorType.TRANSIENT)
+        )
+
+        await sync._sync()
+
+        assert sync.health.state == HealthState.OFFLINE
+        assert sync.health.pending_display == "pending unconfirmed"
+        assert "pending unconfirmed" in sync.health.cli
+        assert load_facts(sync._config.state_dir).pending_confirmed is None
+
+    @pytest.mark.asyncio
+    async def test_successful_cleanup_after_clean_pass_keeps_connected(
+        self, tmp_path: Path
+    ):
+        sync = self._make_sync(tmp_path)
+        older_day = "20260101"
+        today = datetime.now().strftime("%Y%m%d")
+        self._create_segment(
+            sync._config.captures_dir, older_day, "archon", "120000_300"
+        )
+        sync._synced_days.add(older_day)
+        sync._client.get_server_segments = MagicMock(
+            side_effect=lambda day: QueryResult(
+                [{"key": "120000_300"}] if day == older_day else [], None, 200
+            )
+        )
+
+        await sync._sync()
+
+        assert sync._client.get_server_segments.call_count == 2
+        sync._client.get_server_segments.assert_any_call(today)
+        sync._client.get_server_segments.assert_any_call(older_day)
+        assert sync.health.state == HealthState.CONNECTED
+        assert load_facts(sync._config.state_dir).pending_confirmed == 0
 
 
 class TestQuarantineZeroByte:
@@ -422,7 +577,7 @@ class TestQuarantineZeroByte:
             with patch(
                 "asyncio.to_thread",
                 new_callable=AsyncMock,
-                return_value=server_response,
+                return_value=QueryResult(server_response),
             ):
                 await sync._sync()
 
@@ -439,7 +594,9 @@ class TestQuarantineZeroByte:
         server_response = []
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             with patch.object(
                 sync, "_upload_segment", new_callable=AsyncMock
@@ -461,7 +618,9 @@ class TestQuarantineZeroByte:
         server_response = []
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             with patch.object(
                 sync, "_upload_segment", new_callable=AsyncMock, return_value=True
@@ -479,7 +638,9 @@ class TestQuarantineZeroByte:
         server_response = []
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._sync()
 
@@ -517,7 +678,9 @@ class TestQuarantineClientError:
             return False
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             with patch.object(sync, "_upload_segment", side_effect=fake_upload):
                 await sync._sync()
@@ -541,7 +704,9 @@ class TestQuarantineClientError:
             return False
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             with patch.object(sync, "_upload_segment", side_effect=fake_upload):
                 await sync._sync()
@@ -565,7 +730,9 @@ class TestQuarantineClientError:
             return False
 
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             with patch.object(sync, "_upload_segment", side_effect=fake_upload):
                 await sync._sync()
@@ -603,7 +770,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "120000_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -620,7 +789,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "999999_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -649,7 +820,11 @@ class TestCleanupSyncedSegments:
         self._create_segment(captures, "20260101", "archon", "120000_300")
         sync._synced_days.add("20260101")
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=None):
+        with patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(None, ErrorType.TRANSIENT),
+        ):
             await sync._cleanup_synced_segments()
 
         assert (captures / "20260101" / "archon" / "120000_300").exists()
@@ -666,7 +841,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "140000_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -703,7 +880,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "120000_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -739,7 +918,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "120000_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -757,7 +938,9 @@ class TestCleanupSyncedSegments:
 
         server_response = [{"key": "renamed_key", "original_key": "120000_300"}]
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -793,7 +976,9 @@ class TestCleanupFailedSegments:
 
         server_response = []
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 
@@ -829,7 +1014,7 @@ class TestCleanupFailedSegments:
             with patch(
                 "asyncio.to_thread",
                 new_callable=AsyncMock,
-                return_value=server_response,
+                return_value=QueryResult(server_response),
             ):
                 await sync._cleanup_synced_segments()
 
@@ -846,7 +1031,9 @@ class TestCleanupFailedSegments:
 
         server_response = []
         with patch(
-            "asyncio.to_thread", new_callable=AsyncMock, return_value=server_response
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=QueryResult(server_response),
         ):
             await sync._cleanup_synced_segments()
 

@@ -19,6 +19,7 @@ from dbus_next.aio import MessageBus
 from . import __version__
 from .dbusmenu import DBusMenu, MenuItem, separator
 from .sni import StatusNotifierItem, register_with_watcher
+from .sync_health import HealthState, SyncFacts, SyncHealth, derive_health
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ Service: systemctl --user status solstone-linux"""
 SOURCE_DIR = str(Path(__file__).resolve().parent)
 
 
-def _compute_header_label(status, sync_status, pause_remaining) -> str:
+def _compute_header_label(status: str, health: SyncHealth, pause_remaining: int) -> str:
     if status == "paused":
         if pause_remaining and pause_remaining > 0:
             mins = pause_remaining // 60
@@ -53,17 +54,9 @@ def _compute_header_label(status, sync_status, pause_remaining) -> str:
     if status == "stopped":
         return "not running"
     if status == "recording":
-        if sync_status == "offline":
-            return "observing — offline (recording locally)"
-        if sync_status in ("syncing", "uploading", "retrying"):
-            return "observing — syncing"
-        return "observing — connected"
+        return health.header_recording
     if status == "idle":
-        if sync_status == "offline":
-            return "idle — offline"
-        if sync_status in ("syncing", "uploading", "retrying"):
-            return "idle — syncing"
-        return "idle — connected"
+        return health.header_idle
     return str(status)
 
 
@@ -99,8 +92,7 @@ class TrayApp:
         # State cache (for change detection) — empty string forces first update()
         # call to always go through _update_status regardless of initial mode
         self.status = ""
-        self.sync_status = "synced"
-        self.sync_progress = ""
+        self.health = self._fallback_health()
         self.error = ""
         self.paused_remaining = 0
         self.stats = {}
@@ -116,6 +108,19 @@ class TrayApp:
         self._uptime_item: MenuItem = None
         self._pause_submenu: MenuItem = None
         self._resume_item: MenuItem = None
+
+    def _fallback_health(self) -> SyncHealth:
+        return derive_health(
+            SyncFacts(),
+            time.time(),
+            self.config.sync_stale_threshold,
+        )
+
+    def _current_health(self) -> SyncHealth:
+        obs = self._observer
+        if obs._sync:
+            return obs._sync.health
+        return self._fallback_health()
 
     async def start(self):
         pid = os.getpid()
@@ -167,12 +172,7 @@ class TrayApp:
         else:
             status = "idle"
 
-        # Sync status
-        sync_status = "synced"
-        sync_progress = ""
-        if obs._sync:
-            sync_status = obs._sync.sync_status
-            sync_progress = obs._sync.sync_progress
+        health = self._current_health()
 
         # Segment timer
         if obs._paused or obs.segment_dir is None:
@@ -219,23 +219,18 @@ class TrayApp:
             except OSError:
                 pass
 
-            synced_days = 0
-            if obs._sync:
-                synced_days = len(obs._sync._synced_days)
-
             total_size_mb = int(total_size / (1024 * 1024))
             uptime_seconds = int(time.monotonic() - obs._start_mono)
 
             self.stats = {
                 "captures_today": captures_today,
                 "total_size_mb": total_size_mb,
-                "synced_days": synced_days,
                 "uptime_seconds": uptime_seconds,
             }
 
-        self._update_status(status)
-        self._update_sync(sync_status, sync_progress)
-        self._update_header(pause_remaining)
+        self._update_status(status, health)
+        self._update_sync(health)
+        self._update_header(pause_remaining, health)
         self._update_live_stats(segment_timer, pause_remaining)
         self.paused_remaining = pause_remaining
 
@@ -246,7 +241,7 @@ class TrayApp:
 
         # ── Status submenu (live data) ──
         self._status_item = MenuItem(label="observing", enabled=False)
-        self._sync_item = MenuItem(label="sync: up to date", enabled=False)
+        self._sync_item = MenuItem(label="sync: checking...", enabled=False)
         self._segment_item = MenuItem(label="segment: --:--", enabled=False)
         self._cache_item = MenuItem(label="cache: --", enabled=False)
         self._captures_item = MenuItem(label="captures today: --", enabled=False)
@@ -367,23 +362,35 @@ class TrayApp:
             ]
         )
 
-    def _update_status(self, status: str):
+    def _icon_for_health(self, status: str, health: SyncHealth) -> str:
+        if self.error:
+            return ICONS["error"]
+        if status == "stopped":
+            return ICONS["stopped"]
+        if health.icon == "error":
+            return ICONS["error"]
+        if status == "paused":
+            return ICONS["paused"]
+        if health.icon == "syncing":
+            return ICONS["syncing"]
+        if status == "idle" and health.state == HealthState.CONNECTED:
+            return ICONS["idle"]
+        return ICONS.get(health.icon, ICONS["recording"])
+
+    def _update_status(self, status: str, health: SyncHealth):
         """Update tray icon and menu for observer status."""
-        if status == self.status:
+        old_status = self.status
+        old_health_state = self.health.state
+        self.health = health
+        if status == old_status and health.state == old_health_state:
             return
         self.status = status
 
-        # Pick icon
-        if self.error:
-            icon = ICONS["error"]
-        elif self.sync_status in ("syncing", "uploading", "retrying"):
-            icon = ICONS["syncing"]
-        else:
-            icon = ICONS.get(status, ICONS["recording"])
+        icon = self._icon_for_health(status, health)
         self.sni.set_icon(icon)
 
         # Update tooltip
-        self.sni.set_tooltip("solstone observer", self._build_tooltip())
+        self.sni.set_tooltip("solstone observer", self._build_tooltip(health))
 
         # Toggle pause/resume
         is_paused = status == "paused"
@@ -401,44 +408,35 @@ class TrayApp:
         if status == "stopped" or self.error:
             self.sni.set_status("NeedsAttention")
         else:
-            self.sni.set_status("Active")
-        self._update_accessible_descriptions()
+            self.sni.set_status(health.sni_status)
+        self._update_accessible_descriptions(health)
 
         log.info(f"Status -> {status} (icon: {icon})")
 
-    def _update_header(self, pause_remaining: int):
-        label = _compute_header_label(self.status, self.sync_status, pause_remaining)
+    def _update_header(self, pause_remaining: int, health: SyncHealth):
+        label = _compute_header_label(self.status, health, pause_remaining)
         if label == self._status_header.label:
             return
         self._status_header.label = label
         self._status_item.label = label
         self.menu.update_properties(self._status_header, "label")
 
-    def _update_sync(self, sync_status: str, progress: str):
+    def _update_sync(self, health: SyncHealth):
         """Update sync status display."""
-        if sync_status == self.sync_status and progress == self.sync_progress:
+        if self._sync_item.label == health.sync_line:
             return
-        self.sync_status = sync_status
-        self.sync_progress = progress
+        self.health = health
+        self._sync_item.label = health.sync_line
 
-        labels = {
-            "synced": "sync: up to date",
-            "syncing": f"sync: {progress}" if progress else "sync: checking...",
-            "uploading": f"sync: {progress}" if progress else "sync: uploading...",
-            "retrying": f"sync: {progress}" if progress else "sync: retrying...",
-            "offline": "sync: offline",
-        }
-        self._sync_item.label = labels.get(sync_status, f"sync: {sync_status}")
-
-        # Update icon — syncing state gets the half icon
         if not self.error:
-            if sync_status in ("syncing", "uploading", "retrying"):
-                self.sni.set_icon(ICONS["syncing"])
+            self.sni.set_icon(self._icon_for_health(self.status, health))
+            if self.status == "stopped":
+                self.sni.set_status("NeedsAttention")
             else:
-                self.sni.set_icon(ICONS.get(self.status, ICONS["recording"]))
+                self.sni.set_status(health.sni_status)
 
-        self.sni.set_tooltip("solstone observer", self._build_tooltip())
-        self._update_accessible_descriptions()
+        self.sni.set_tooltip("solstone observer", self._build_tooltip(health))
+        self._update_accessible_descriptions(health)
 
     def _update_live_stats(self, segment_timer: int, pause_remaining: int):
         """Update the live stats in the status submenu."""
@@ -453,10 +451,9 @@ class TrayApp:
         if self.stats:
             captures = self.stats.get("captures_today", 0)
             size_mb = self.stats.get("total_size_mb", 0)
-            synced_days = self.stats.get("synced_days", 0)
             uptime = self.stats.get("uptime_seconds", 0)
 
-            new_cache = f"cache: {size_mb} MB ({synced_days} days synced)"
+            new_cache = f"cache: {size_mb} MB"
             new_captures = f"captures today: {captures} segments"
 
             hours = uptime // 3600
@@ -477,8 +474,10 @@ class TrayApp:
             if self._resume_item.label != new_resume:
                 self._resume_item.label = new_resume
 
-    def _build_tooltip(self) -> str:
+    def _build_tooltip(self, health: SyncHealth | None = None) -> str:
         """Build plain-text tooltip body (cross-DE compatible)."""
+        if health is None:
+            health = self.health
         parts = []
 
         status_labels = {
@@ -489,33 +488,26 @@ class TrayApp:
         }
         parts.append(status_labels.get(self.status, self.status))
 
-        if self.sync_status == "synced":
-            parts.append("all segments synced")
-        elif self.sync_progress:
-            parts.append(f"sync: {self.sync_progress}")
-        else:
-            parts.append(f"sync: {self.sync_status}")
+        parts.append(health.tooltip)
 
         if self.error:
             parts.append(self.error)
 
         return "\n".join(parts)
 
-    def _update_accessible_descriptions(self):
+    def _update_accessible_descriptions(self, health: SyncHealth | None = None):
+        if health is None:
+            health = self.health
         if self.error:
             desc = "Solstone observer — error"
-        elif self.sync_status in ("syncing", "uploading", "retrying"):
-            desc = "Solstone observer — syncing"
         elif self.status == "paused":
             desc = "Solstone observer — paused"
         elif self.status == "idle":
-            desc = "Solstone observer — idle"
+            desc = health.accessible_idle
         elif self.status == "stopped":
             desc = "Solstone observer — stopped"
         else:
-            desc = "Solstone observer — recording"
-            if self.config.stream:
-                desc = f"{desc} ({self.config.stream})"
+            desc = health.accessible_recording
 
         self.sni.set_icon_accessible_desc(desc)
         self.sni.set_attention_accessible_desc(desc)

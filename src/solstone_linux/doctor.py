@@ -13,7 +13,11 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from typing import Callable, NamedTuple
+
+from .config import load_config
+from .sync_health import derive_health, load_facts
 
 CheckResult = NamedTuple(
     "CheckResult",
@@ -286,6 +290,13 @@ def check_appindicator_ext() -> CheckResult:
     )
 
 
+def check_sync_health() -> CheckResult:
+    config = load_config()
+    facts = load_facts(config.state_dir)
+    health = derive_health(facts, time.time(), config.sync_stale_threshold)
+    return CheckResult("sync health", health.doctor_severity, health.doctor_detail)
+
+
 def run_doctor() -> int:
     checks: list[tuple[str, Callable[[], CheckResult]]] = [
         ("python version", check_python_version),
@@ -297,6 +308,7 @@ def run_doctor() -> int:
         ("xdg-desktop-portal", lambda: asyncio.run(check_portal())),
         ("x11 capture", check_x11_capture),
         ("systemd --user", check_user_systemd),
+        ("sync health", check_sync_health),
         ("pipx", check_pipx),
         ("appindicator ext (soft)", check_appindicator_ext),
     ]

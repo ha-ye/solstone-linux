@@ -12,6 +12,7 @@ import pytest
 from solstone_linux.config import Config
 from solstone_linux.dbusmenu import MenuItem, separator
 from solstone_linux.sni import StatusNotifierItem
+from solstone_linux.sync_health import ErrorType, HealthState, SyncFacts, derive_health
 from solstone_linux.tray import (
     AGENT_INSTRUCTIONS,
     ICONS,
@@ -41,6 +42,22 @@ def _make_app(tmp_path=None):
     bus = MagicMock()
     app = TrayApp(observer, bus)
     return app
+
+
+def _health(facts=None):
+    return derive_health(facts or SyncFacts(), time.time())
+
+
+def _connected_health():
+    return _health(SyncFacts(pending_confirmed=0, last_successful_sync=time.time()))
+
+
+def _syncing_health(progress="3/10 segments"):
+    return _health(SyncFacts(in_progress=True, progress=progress))
+
+
+def _offline_health():
+    return _health(SyncFacts(last_error_class=ErrorType.TRANSIENT))
 
 
 class TestResolveIconThemePath:
@@ -82,7 +99,7 @@ class TestBuildMenu:
         assert isinstance(app._status_item, MenuItem)
         assert app._status_item.label == "observing"
         assert app._status_item.enabled is False
-        assert app._sync_item.label == "sync: up to date"
+        assert app._sync_item.label == "sync: checking..."
         assert app._pause_submenu.children_display == "submenu"
         assert len(app._pause_submenu.children) == 4
         assert app._resume_item.visible is False
@@ -97,7 +114,7 @@ class TestUpdateStatus:
         app._build_menu()
         app.menu.update_properties = MagicMock()
 
-        app._update_status("paused")
+        app._update_status("paused", app.health)
 
         assert app.status == "paused"
         assert app._pause_submenu.visible is False
@@ -116,7 +133,7 @@ class TestUpdateStatus:
         app = _make_app()
         app._build_menu()
 
-        app._update_status("idle")
+        app._update_status("idle", app.health)
 
         assert app.status == "idle"
 
@@ -124,7 +141,7 @@ class TestUpdateStatus:
         app = _make_app()
         app._build_menu()
 
-        app._update_status("stopped")
+        app._update_status("stopped", app.health)
 
         assert app.status == "stopped"
         assert app.sni._status == "NeedsAttention"
@@ -132,10 +149,10 @@ class TestUpdateStatus:
     def test_update_status_recording_uses_error_icon_when_error_set(self):
         app = _make_app()
         app._build_menu()
-        app._update_status("paused")
+        app._update_status("paused", app.health)
         app.error = "Auth failed"
 
-        app._update_status("recording")
+        app._update_status("recording", app.health)
 
         assert app.sni._icon_name == ICONS["error"]
 
@@ -145,7 +162,7 @@ class TestUpdateSync:
         app = _make_app()
         app._build_menu()
 
-        app._update_sync("synced", "")
+        app._update_sync(_connected_health())
 
         assert app._sync_item.label == "sync: up to date"
 
@@ -153,7 +170,7 @@ class TestUpdateSync:
         app = _make_app()
         app._build_menu()
 
-        app._update_sync("syncing", "3/10 segments")
+        app._update_sync(_syncing_health("3/10 segments"))
 
         assert app._sync_item.label == "sync: 3/10 segments"
 
@@ -161,9 +178,21 @@ class TestUpdateSync:
         app = _make_app()
         app._build_menu()
 
-        app._update_sync("offline", "")
+        app._update_sync(_offline_health())
 
-        assert app._sync_item.label == "sync: offline"
+        assert app._sync_item.label == "sync: offline; will retry"
+
+    def test_update_sync_update_needed_sets_attention(self):
+        app = _make_app()
+        app._build_menu()
+        health = _health(SyncFacts(last_error_class=ErrorType.INCOMPATIBLE))
+
+        app._update_status("recording", health)
+        app._update_sync(health)
+
+        assert health.state == HealthState.UPDATE_NEEDED
+        assert app.sni._status == "NeedsAttention"
+        assert app.sni._icon_name == ICONS["error"]
 
 
 class TestUpdateLiveStats:
@@ -173,14 +202,13 @@ class TestUpdateLiveStats:
         app.stats = {
             "captures_today": 5,
             "total_size_mb": 42,
-            "synced_days": 7,
             "uptime_seconds": 7260,
         }
 
         app._update_live_stats(245, 0)
 
         assert app._segment_item.label == "segment: 4:05 remaining"
-        assert app._cache_item.label == "cache: 42 MB (7 days synced)"
+        assert app._cache_item.label == "cache: 42 MB"
         assert app._captures_item.label == "captures today: 5 segments"
         assert app._uptime_item.label == "uptime: 2h 1m"
 
@@ -191,7 +219,6 @@ class TestUpdateLiveStats:
         app.stats = {
             "captures_today": 5,
             "total_size_mb": 42,
-            "synced_days": 7,
             "uptime_seconds": 7260,
         }
 
@@ -209,20 +236,21 @@ class TestHeaderLabel:
         app._build_menu()
         app.status = "recording"
         app.menu.update_properties = MagicMock()
-        app.sync_status = "offline"
+        offline = _offline_health()
 
-        app._update_header(0)
+        app._update_header(0, offline)
         app.menu.update_properties.reset_mock()
 
-        app.sync_status = "synced"
-        app._update_header(0)
+        app._update_header(0, _connected_health())
 
         app.menu.update_properties.assert_called_with(app._status_header, "label")
         assert app._status_header.label == "observing — connected"
 
-    def test_header_recording_synced(self):
+    def test_header_recording_connected(self):
         app = _make_app()
         app._build_menu()
+        app._observer._sync = MagicMock()
+        app._observer._sync.health = _connected_health()
 
         app.update()
 
@@ -245,38 +273,38 @@ class TestHeaderLabel:
         app = _make_app()
         app._build_menu()
         app._observer._sync = MagicMock()
-        app._observer._sync.sync_status = "offline"
-        app._observer._sync.sync_progress = ""
+        app._observer._sync.health = _offline_health()
 
         app.update()
 
-        assert app._status_header.label == "observing — offline (recording locally)"
-        assert app._status_item.label == "observing — offline (recording locally)"
+        assert app._status_header.label == "observing — offline (saving locally)"
+        assert app._status_item.label == "observing — offline (saving locally)"
 
 
 class TestComputeHeaderLabel:
     @pytest.mark.parametrize(
-        "status,sync_status,pause_remaining,expected",
+        "status,health_key,pause_remaining,expected",
         [
-            ("recording", "synced", 0, "observing — connected"),
+            ("recording", "connected", 0, "observing — connected"),
             ("recording", "syncing", 0, "observing — syncing"),
-            ("recording", "uploading", 0, "observing — syncing"),
-            ("recording", "retrying", 0, "observing — syncing"),
-            ("recording", "offline", 0, "observing — offline (recording locally)"),
-            ("idle", "synced", 0, "idle — connected"),
+            ("recording", "offline", 0, "observing — offline (saving locally)"),
+            ("idle", "connected", 0, "idle — connected"),
             ("idle", "syncing", 0, "idle — syncing"),
-            ("idle", "uploading", 0, "idle — syncing"),
-            ("idle", "retrying", 0, "idle — syncing"),
-            ("idle", "offline", 0, "idle — offline"),
-            ("paused", "synced", 0, "paused"),
-            ("paused", "synced", 900, "paused (15m remaining)"),
+            ("idle", "offline", 0, "idle — offline (saving locally)"),
+            ("paused", "connected", 0, "paused"),
+            ("paused", "connected", 900, "paused (15m remaining)"),
             ("paused", "offline", 59, "paused (0m remaining)"),
-            ("stopped", "synced", 0, "not running"),
-            ("weird", "synced", 0, "weird"),
+            ("stopped", "connected", 0, "not running"),
+            ("weird", "connected", 0, "weird"),
         ],
     )
-    def test_compute_header_label(self, status, sync_status, pause_remaining, expected):
-        assert _compute_header_label(status, sync_status, pause_remaining) == expected
+    def test_compute_header_label(self, status, health_key, pause_remaining, expected):
+        health = {
+            "connected": _connected_health(),
+            "syncing": _syncing_health(),
+            "offline": _offline_health(),
+        }[health_key]
+        assert _compute_header_label(status, health, pause_remaining) == expected
 
 
 class TestBuildTooltip:
@@ -287,7 +315,7 @@ class TestBuildTooltip:
         tooltip = app._build_tooltip()
 
         assert "observing" in tooltip
-        assert "all segments synced" in tooltip
+        assert "sync: not confirmed yet" in tooltip
 
     def test_build_tooltip_stopped(self):
         app = _make_app()
@@ -307,8 +335,7 @@ class TestBuildTooltip:
 
     def test_build_tooltip_sync_progress(self):
         app = _make_app()
-        app.sync_status = "syncing"
-        app.sync_progress = "2/5"
+        app.health = _syncing_health("2/5")
 
         tooltip = app._build_tooltip()
 

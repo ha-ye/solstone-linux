@@ -6,6 +6,14 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- Sync health now fails closed across tray, CLI, doctor, and D-Bus: `connected`
+  is shown only after an earned successful journal check with no pending
+  segments. Query failures are classified, including 404 as update-needed,
+  health facts persist across restart, stale sync is based on last successful
+  journal contact, and the misleading synced-days comfort metric is no longer
+  displayed.
+
 ### Fixed
 - setup is now genuinely promptless. removed the residual `Solstone journal URL`
   input prompt that the interactive and flag setup paths still showed; setup now

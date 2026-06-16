@@ -2,10 +2,13 @@
 # Copyright (c) 2026 sol pbc
 
 import sys
+from pathlib import Path
 
 import pytest
 
 from solstone_linux import doctor
+from solstone_linux.config import Config
+from solstone_linux.sync_health import ErrorType, SyncFacts, save_facts
 
 
 def _set_all_checks(
@@ -20,6 +23,7 @@ def _set_all_checks(
     portal_result=None,
     x11_capture_result=None,
     systemd_result=None,
+    sync_health_result=None,
     pipx_result=None,
     appindicator_result=None,
 ):
@@ -72,6 +76,11 @@ def _set_all_checks(
     )
     monkeypatch.setattr(
         doctor,
+        "check_sync_health",
+        lambda: sync_health_result or doctor.CheckResult("sync health", "ok", ""),
+    )
+    monkeypatch.setattr(
+        doctor,
         "check_pipx",
         lambda: pipx_result or doctor.CheckResult("pipx", "ok", ""),
     )
@@ -93,7 +102,7 @@ def test_run_doctor_all_pass_returns_zero(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "python version" in captured.out
     assert "gtk4 typelib" in captured.out
-    assert "doctor: 11 checks, 0 failed, 0 warnings" in captured.out
+    assert "doctor: 12 checks, 0 failed, 0 warnings" in captured.out
 
 
 def test_run_doctor_any_fail_returns_one(monkeypatch):
@@ -116,6 +125,22 @@ def test_run_doctor_warn_only_returns_zero(monkeypatch):
     )
 
     assert doctor.run_doctor() == 0
+
+
+def test_check_sync_health_update_needed(monkeypatch, tmp_path: Path):
+    config = Config(base_dir=tmp_path)
+    config.ensure_dirs()
+    save_facts(
+        config.state_dir,
+        SyncFacts(last_error_class=ErrorType.INCOMPATIBLE, last_error_code=404),
+    )
+    monkeypatch.setattr(doctor, "load_config", lambda: config)
+
+    result = doctor.check_sync_health()
+
+    assert result.name == "sync health"
+    assert result.severity == "fail"
+    assert "update needed" in result.detail
 
 
 def test_check_exception_renders_as_fail(monkeypatch, capsys):

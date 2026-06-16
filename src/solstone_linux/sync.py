@@ -25,9 +25,18 @@ import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Callable
 
 from .config import Config
-from .upload import ErrorType, UploadClient
+from .sync_health import (
+    ErrorType,
+    SyncFacts,
+    SyncHealth,
+    derive_health,
+    load_facts,
+    save_facts,
+)
+from .upload import UploadClient
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +52,23 @@ CIRCUIT_COOLDOWN_MAX = 300  # cap at 5 minutes
 # Synced days older than this are pruned from the cache
 SYNCED_DAYS_MAX_AGE = 90
 
+# Flush durable contact at most this often during long healthy drains.
+CONTACT_FLUSH_INTERVAL = 30
+
 
 class SyncService:
     """Background sync service that uploads completed segments to the server."""
 
-    def __init__(self, config: Config, client: UploadClient):
+    def __init__(
+        self,
+        config: Config,
+        client: UploadClient,
+        now: Callable[[], float] = time.time,
+    ):
         self._config = config
         self._client = client
+        self._now = now
+        self._stale_threshold = config.sync_stale_threshold
         self._synced_days: set[str] = set()
         self._consecutive_failures = 0
         self._last_error_type: ErrorType | None = None
@@ -60,12 +79,24 @@ class SyncService:
         self._last_full_sync: float = 0
         self._running = True
         self._trigger = asyncio.Event()
-        self.sync_status = "synced"
-        self.sync_progress = ""
         self._dbus_service = None
+        self._facts: SyncFacts = load_facts(self._config.state_dir)
+        self._facts.in_progress = False
+        self._facts.progress = ""
+        self._last_contact_flush = 0.0
+        self._last_emitted_health = ""
+        self._save_health()
 
         # Load synced days cache
         self._load_synced_days()
+
+    @property
+    def health(self) -> SyncHealth:
+        return derive_health(self._facts, self._now(), self._stale_threshold)
+
+    @property
+    def progress(self) -> str:
+        return self._facts.progress
 
     def _synced_days_path(self) -> Path:
         return self._config.state_dir / "synced_days.json"
@@ -171,15 +202,17 @@ class SyncService:
                 continue
 
             # Gate 3: fresh server confirmation
-            server_segments = await asyncio.to_thread(
+            query_result = await asyncio.to_thread(
                 self._client.get_server_segments, day
             )
-            if server_segments is None:
+            if query_result.error_type is not None or query_result.segments is None:
+                self._record_failure(query_result.error_type, query_result.status_code)
                 logger.warning("Cleanup: skipping day %s — server unreachable", day)
                 continue
+            self._record_contact()
 
             server_keys: set[str] = set()
-            for seg in server_segments:
+            for seg in query_result.segments:
                 server_keys.add(seg.get("key", ""))
                 if "original_key" in seg:
                     server_keys.add(seg["original_key"])
@@ -232,10 +265,97 @@ class SyncService:
         if deleted_total:
             logger.info("Cleanup: deleted %d segment(s) total", deleted_total)
 
+    def _save_health(self) -> None:
+        try:
+            save_facts(self._config.state_dir, self._facts)
+        except OSError as e:
+            logger.warning("Failed to save sync health: %s", e)
+
+    def _emit_health_changed(self) -> None:
+        health = self.health
+        emitted = f"{health.state.value}:{self._facts.progress}"
+        if emitted == self._last_emitted_health:
+            return
+        self._last_emitted_health = emitted
+        if self._dbus_service:
+            self._dbus_service.SyncProgressChanged(emitted)
+
+    def _set_progress(self, progress: str, in_progress: bool = True) -> None:
+        self._facts.in_progress = in_progress
+        self._facts.progress = progress
+        self._save_health()
+        self._emit_health_changed()
+
+    def _record_contact(self, force: bool = False) -> None:
+        self._facts.last_successful_contact = self._now()
+        now_mono = time.monotonic()
+        if force or now_mono - self._last_contact_flush >= CONTACT_FLUSH_INTERVAL:
+            self._last_contact_flush = now_mono
+            self._save_health()
+        self._emit_health_changed()
+
+    def _record_failure(
+        self, error_type: ErrorType | None, status_code: int | None = None
+    ) -> None:
+        if error_type is None:
+            return
+
+        self._last_error_type = error_type
+        self._facts.last_error_class = error_type
+        self._facts.last_error_code = status_code
+        self._facts.pending_confirmed = None
+        self._save_health()
+        self._emit_health_changed()
+
+        if error_type == ErrorType.CLIENT:
+            return
+
+        self._consecutive_failures += 1
+        threshold = self._circuit_threshold()
+        if self._consecutive_failures >= threshold:
+            self._circuit_open = True
+            self._circuit_open_permanent = error_type == ErrorType.AUTH
+            self._circuit_open_since = time.monotonic()
+            self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
+            logger.error(
+                "Circuit breaker OPEN: %s consecutive %s failures (threshold: %s)",
+                self._consecutive_failures,
+                error_type.value,
+                threshold,
+            )
+
+    def _commit_pass_result(
+        self,
+        success: bool,
+        error_type: ErrorType | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        self._facts.in_progress = False
+        self._facts.progress = ""
+        if success:
+            now = self._now()
+            self._facts.last_successful_sync = now
+            if self._facts.last_successful_contact is None:
+                self._facts.last_successful_contact = now
+            self._facts.last_error_class = None
+            self._facts.last_error_code = None
+            self._facts.pending_confirmed = 0
+            self._consecutive_failures = 0
+            self._last_error_type = None
+        else:
+            self._facts.pending_confirmed = None
+            self._facts.last_error_class = error_type
+            self._facts.last_error_code = status_code
+        self._last_contact_flush = time.monotonic()
+        self._save_health()
+        self._emit_health_changed()
+
     def _circuit_threshold(self) -> int:
         """Get circuit breaker threshold based on last error type."""
-        if self._last_error_type == ErrorType.AUTH:
+        if self._last_error_type in (ErrorType.AUTH, ErrorType.INCOMPATIBLE):
             return CIRCUIT_THRESHOLD_AUTH
+        if self._last_error_type == ErrorType.CLIENT:
+            return 0
         return CIRCUIT_THRESHOLD_TRANSIENT
 
     def trigger(self) -> None:
@@ -246,14 +366,6 @@ class SyncService:
         """Stop the sync service."""
         self._running = False
         self._trigger.set()
-
-    def _set_sync_status(self, status: str, progress: str = "") -> None:
-        """Update sync status and emit D-Bus signal if changed."""
-        changed = self.sync_status != status or self.sync_progress != progress
-        self.sync_status = status
-        self.sync_progress = progress
-        if changed and self._dbus_service:
-            self._dbus_service.SyncProgressChanged(f"{status}:{progress}")
 
     async def run(self) -> None:
         """Main sync loop — waits for triggers, then syncs."""
@@ -275,7 +387,10 @@ class SyncService:
 
                 if self._circuit_open:
                     if self._circuit_open_permanent:
-                        self._set_sync_status("offline")
+                        self._facts.in_progress = False
+                        self._facts.progress = ""
+                        self._save_health()
+                        self._emit_health_changed()
                         logger.warning(
                             "Circuit breaker open (permanent) — skipping sync"
                         )
@@ -284,21 +399,23 @@ class SyncService:
                     elapsed = time.monotonic() - self._circuit_open_since
                     if elapsed < self._circuit_cooldown:
                         remaining = self._circuit_cooldown - elapsed
-                        self._set_sync_status(
-                            "retrying", f"{remaining:.0f}s until probe"
-                        )
+                        self._facts.in_progress = False
+                        self._facts.progress = f"{remaining:.0f}s until probe"
+                        self._save_health()
+                        self._emit_health_changed()
                         logger.warning(
                             f"Circuit breaker open — {remaining:.0f}s until probe"
                         )
                         continue
 
-                    self._set_sync_status("retrying", "probing journal...")
+                    self._set_progress("probing journal...")
                     logger.info("Circuit breaker half-open — probing server")
                     today = datetime.now().strftime("%Y%m%d")
                     probe_result = await asyncio.to_thread(
                         self._client.get_server_segments, today
                     )
-                    if probe_result is not None:
+                    if probe_result.error_type is None:
+                        self._record_contact(force=True)
                         logger.info("Circuit breaker probe succeeded — closing circuit")
                         self._circuit_open = False
                         self._circuit_open_permanent = False
@@ -306,29 +423,34 @@ class SyncService:
                         self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
                         self._consecutive_failures = 0
                         self._last_error_type = None
-                        self._set_sync_status("syncing")
+                        self._facts.last_error_class = None
+                        self._facts.last_error_code = None
+                        self._set_progress("syncing...")
                     else:
+                        self._record_failure(
+                            probe_result.error_type, probe_result.status_code
+                        )
                         self._circuit_cooldown = min(
                             self._circuit_cooldown * CIRCUIT_COOLDOWN_FACTOR,
                             CIRCUIT_COOLDOWN_MAX,
                         )
                         self._circuit_open_since = time.monotonic()
-                        self._set_sync_status(
-                            "retrying",
-                            f"probe failed, next in {self._circuit_cooldown:.0f}s",
+                        self._facts.in_progress = False
+                        self._facts.progress = (
+                            f"probe failed, next in {self._circuit_cooldown:.0f}s"
                         )
+                        self._save_health()
+                        self._emit_health_changed()
                         logger.warning(
                             f"Circuit breaker probe failed — next probe in {self._circuit_cooldown:.0f}s"
                         )
                         continue
 
                 # Force full sync daily
-                now = time.time()
+                now = self._now()
                 force_full = (now - self._last_full_sync) > 86400
 
-                self._set_sync_status("syncing")
                 await self._sync(force_full=force_full)
-                self._set_sync_status("synced")
 
                 if force_full:
                     self._last_full_sync = now
@@ -340,41 +462,56 @@ class SyncService:
     async def _sync(self, force_full: bool = False) -> None:
         """Walk days newest-to-oldest and upload missing segments."""
         captures_dir = self._config.captures_dir
-        if not captures_dir.exists():
-            return
 
         today = datetime.now().strftime("%Y%m%d")
 
         # Collect segments by day
-        segments_by_day = self._collect_segments(captures_dir)
-        if not segments_by_day:
-            return
+        segments_by_day = (
+            self._collect_segments(captures_dir) if captures_dir.exists() else {}
+        )
+        days = set(segments_by_day.keys())
+        # Always query today so a caught-up/no-cache observer can earn connected.
+        days.add(today)
 
-        for day in sorted(segments_by_day.keys(), reverse=True):
+        self._set_progress("checking journal...")
+        pass_success = True
+        pass_error_type: ErrorType | None = None
+        pass_error_code: int | None = None
+
+        for day in sorted(days, reverse=True):
             if not self._running:
+                pass_success = False
                 break
 
             if self._circuit_open:
+                pass_success = False
                 break
 
             # Skip past days already fully synced (unless forcing)
             if day != today and day in self._synced_days and not force_full:
                 continue
 
-            local_segments = segments_by_day[day]
+            local_segments = segments_by_day.get(day, [])
 
             # Query server for existing segments
-            self._set_sync_status("syncing", f"checking {day}...")
-            server_segments = await asyncio.to_thread(
+            self._set_progress(f"checking {day}...")
+            query_result = await asyncio.to_thread(
                 self._client.get_server_segments, day
             )
-            if server_segments is None:
+            if query_result.error_type is not None or query_result.segments is None:
+                pass_success = False
+                pass_error_type = query_result.error_type
+                pass_error_code = query_result.status_code
+                self._record_failure(query_result.error_type, query_result.status_code)
                 logger.warning(f"Failed to query server for day {day}")
+                if self._circuit_open:
+                    break
                 continue
+            self._record_contact()
 
             # Build lookup
             server_keys: set[str] = set()
-            for seg in server_segments:
+            for seg in query_result.segments:
                 server_keys.add(seg.get("key", ""))
                 if "original_key" in seg:
                     server_keys.add(seg["original_key"])
@@ -396,29 +533,23 @@ class SyncService:
                     continue
 
                 any_needed_upload = True
-                self._set_sync_status("uploading", f"uploading {segment_key}")
+                self._set_progress(f"uploading {segment_key}")
                 success = await self._upload_segment(day, segment_dir)
 
                 if not success:
+                    pass_success = False
+                    pass_error_type = self._last_error_type
+                    pass_error_code = None
                     if self._last_error_type == ErrorType.CLIENT:
                         # Non-retryable client error (e.g. 400) — quarantine, don't trip circuit
                         self._quarantine_segment(
                             segment_dir, "server rejected (client error)"
                         )
+                        self._record_failure(self._last_error_type)
                         continue
 
-                    self._consecutive_failures += 1
-                    threshold = self._circuit_threshold()
-                    if self._consecutive_failures >= threshold:
-                        self._circuit_open = True
-                        self._circuit_open_since = time.monotonic()
-                        self._circuit_cooldown = CIRCUIT_COOLDOWN_INITIAL
-                        logger.error(
-                            f"Circuit breaker OPEN: {self._consecutive_failures} consecutive "
-                            f"{self._last_error_type.value if self._last_error_type else 'unknown'} "
-                            f"failures (threshold: {threshold})"
-                        )
-                        self._set_sync_status("retrying")
+                    self._record_failure(self._last_error_type)
+                    if self._circuit_open:
                         break
                 else:
                     self._consecutive_failures = 0
@@ -428,6 +559,15 @@ class SyncService:
             if day != today and not any_needed_upload:
                 self._synced_days.add(day)
                 self._save_synced_days()
+
+        if pass_success and not self._circuit_open and self._running:
+            self._commit_pass_result(True)
+        else:
+            self._commit_pass_result(
+                False,
+                pass_error_type or self._facts.last_error_class,
+                pass_error_code or self._facts.last_error_code,
+            )
 
         # Cleanup old synced segments
         if not self._circuit_open and self._running:
@@ -477,6 +617,7 @@ class SyncService:
         )
 
         if result.success:
+            self._record_contact()
             logger.info(f"Uploaded: {day}/{segment_key} ({len(files)} files)")
             return True
 

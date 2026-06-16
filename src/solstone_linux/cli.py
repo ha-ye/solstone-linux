@@ -15,18 +15,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.resources
-import json
 import logging
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import doctor, streams
 from .config import DEFAULT_SERVER_URL, load_config, save_config
 from .streams import stream_name
+from .sync_health import derive_health, load_facts
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -377,15 +378,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         print(f"Retain: {retention} day(s)")
 
-    # Synced days
-    synced_path = config.state_dir / "synced_days.json"
-    if synced_path.exists():
-        try:
-            with open(synced_path) as f:
-                synced = json.load(f)
-            print(f"Synced: {len(synced)} day(s) fully synced")
-        except (json.JSONDecodeError, OSError):
-            pass
+    facts = load_facts(config.state_dir)
+    health = derive_health(facts, time.time(), config.sync_stale_threshold)
+    print(health.cli)
 
     # Systemd status
     try:
