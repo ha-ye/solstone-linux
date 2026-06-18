@@ -4,6 +4,14 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.4.0] - 2026-06-17
+
+### Added
+- a new `solstone-linux settings` command lets you adjust how this observer behaves after setup, from one place instead of hand-editing a config file. you can change how often it makes a segment, the framerate, whether it starts paused, the chat bridge, and how long it keeps local cache. setup itself stays prompt-free; your identity and pairing are left untouched.
+
+### Changed
+- this observer's settings now live under `~/.config/solstone-linux/`, where linux tools expect config to be. if you're upgrading, the move happens on its own the first time you run, with nothing to redo: no re-setup, no re-pairing. your segments stay exactly where they are.
+
 ## [0.3.3] - 2026-06-16
 
 ### Fixed
