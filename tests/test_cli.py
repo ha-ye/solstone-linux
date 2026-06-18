@@ -3,10 +3,14 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
+from solstone_linux import __version__
 from solstone_linux import cli as cli_module
 from solstone_linux.cli import (
     _cmd_setup_interactive,
@@ -43,6 +47,17 @@ def _run_settings(tmp_path: Path, inputs: list[str]) -> Config:
                 assert cmd_settings(_args()) == 0
 
     return save_mock.call_args.args[0]
+
+
+def test_main_version_flag(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["solstone-linux", "--version"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_module.main()
+
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert __version__ in out
 
 
 _BINARY = "/home/user/.local/pipx/venvs/solstone-linux/bin/solstone-linux"

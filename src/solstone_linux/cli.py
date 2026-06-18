@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import doctor, streams
+from . import __version__, doctor, streams
 from .config import DEFAULT_SERVER_URL, load_config, save_config
 from .streams import stream_name
 from .sync_health import derive_health, load_facts
@@ -480,6 +480,9 @@ def main() -> None:
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug logging"
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     subparsers = parser.add_subparsers(dest="command")
 
