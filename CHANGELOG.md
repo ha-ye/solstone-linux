@@ -4,6 +4,11 @@ All notable changes to solstone-linux are documented here.
 The format is based on Keep a Changelog (https://keepachangelog.com/),
 and this project adheres to Semantic Versioning.
 
+## [0.4.1] - 2026-06-17
+
+### Added
+- you can now check which version you're running. `solstone-linux --version` prints it, so when you're following along with the release notes or asking for help, you know exactly what you have.
+
 ## [0.4.0] - 2026-06-17
 
 ### Added
