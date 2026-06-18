@@ -12,6 +12,7 @@ from solstone_linux.cli import (
     _cmd_setup_interactive,
     cmd_install_service,
     cmd_setup,
+    cmd_settings,
     cmd_status,
 )
 from solstone_linux.config import Config, DEFAULT_SERVER_URL
@@ -20,6 +21,28 @@ from solstone_linux.sync_health import ErrorType, SyncFacts, save_facts
 
 def _args() -> argparse.Namespace:
     return argparse.Namespace()
+
+
+def _settings_config(tmp_path: Path) -> Config:
+    return Config(
+        base_dir=tmp_path,
+        config_dir=tmp_path / "config",
+        server_url="https://id",
+        key="KKKK",
+        stream="strm",
+        capture_framerate=2,
+    )
+
+
+def _run_settings(tmp_path: Path, inputs: list[str]) -> Config:
+    config = _settings_config(tmp_path)
+
+    with patch("solstone_linux.cli.load_config", return_value=config):
+        with patch("solstone_linux.cli.save_config") as save_mock:
+            with patch("builtins.input", side_effect=inputs):
+                assert cmd_settings(_args()) == 0
+
+    return save_mock.call_args.args[0]
 
 
 _BINARY = "/home/user/.local/pipx/venvs/solstone-linux/bin/solstone-linux"
@@ -39,6 +62,56 @@ def _is_dir_without_icons(self: Path) -> bool:
     if self == icon_source:
         return False
     return _REAL_IS_DIR(self)
+
+
+def test_cmd_settings_enter_keeps_all(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["", "", "", "", "", ""])
+
+    assert saved_config.capture_framerate == 2
+    assert saved_config.draw_cursor is True
+    assert saved_config.start_paused is False
+    assert saved_config.segment_interval == 300
+    assert saved_config.chat_bridge_enabled is True
+    assert saved_config.cache_retention_days == 7
+    assert saved_config.server_url == "https://id"
+    assert saved_config.key == "KKKK"
+    assert saved_config.stream == "strm"
+
+
+def test_cmd_settings_changes_framerate(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["5", "", "", "", "", ""])
+
+    assert saved_config.capture_framerate == 5
+    assert saved_config.server_url == "https://id"
+    assert saved_config.key == "KKKK"
+    assert saved_config.stream == "strm"
+
+
+def test_cmd_settings_framerate_clamped(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["99", "", "", "", "", ""])
+
+    assert saved_config.capture_framerate == 10
+
+
+def test_cmd_settings_framerate_reprompts_on_invalid(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["abc", "3", "", "", "", "", ""])
+
+    assert saved_config.capture_framerate == 3
+
+
+def test_cmd_settings_toggles_bool(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["", "n", "", "", "", ""])
+
+    assert saved_config.draw_cursor is False
+    assert saved_config.server_url == "https://id"
+    assert saved_config.key == "KKKK"
+    assert saved_config.stream == "strm"
+
+
+def test_cmd_settings_retention_semantics(tmp_path: Path):
+    saved_config = _run_settings(tmp_path, ["", "", "", "", "", "-1"])
+
+    assert saved_config.cache_retention_days == -1
 
 
 def test_cmd_status_prints_sync_health(tmp_path: Path, monkeypatch, capsys):

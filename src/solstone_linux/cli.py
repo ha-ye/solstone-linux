@@ -6,6 +6,7 @@
 Subcommands:
     run             Start capture loop + sync service (default)
     setup           Interactive configuration
+    settings        Edit capture/behavior settings
     install-service Write systemd user unit, enable, start
     status          Show capture and sync state
 """
@@ -37,6 +38,63 @@ def _setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _prompt_bool(label: str, current: bool) -> bool:
+    while True:
+        value = input(f"{label} [{'y' if current else 'n'}]: ").strip().lower()
+        if value == "":
+            return current
+        if value in ("y", "yes"):
+            return True
+        if value in ("n", "no"):
+            return False
+        print("Enter y or n.")
+
+
+def _prompt_positive_int(label: str, current: int) -> int:
+    while True:
+        value = input(f"{label} [{current}]: ").strip()
+        if value == "":
+            return current
+        try:
+            parsed = int(value)
+        except ValueError:
+            print("Enter a positive integer.")
+            continue
+        if parsed > 0:
+            return parsed
+        print("Enter a positive integer.")
+
+
+def _prompt_framerate(current: int) -> int:
+    while True:
+        value = input(f"Capture framerate [{current}]: ").strip()
+        if value == "":
+            return current
+        try:
+            parsed = int(value)
+        except ValueError:
+            print("Enter an integer.")
+            continue
+        clamped = max(1, min(parsed, 10))
+        if clamped != parsed:
+            print(f"(clamped to {clamped})")
+        return clamped
+
+
+def _prompt_retention(current: int) -> int:
+    while True:
+        value = input(
+            "Cache retention days (-1 = keep forever, 0 = delete after sync, "
+            f"N = keep N days) [{current}]: "
+        ).strip()
+        if value == "":
+            return current
+        try:
+            return int(value)
+        except ValueError:
+            print("Enter an integer.")
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -196,6 +254,23 @@ def _cmd_setup_interactive() -> int:
     print(
         "\nRun 'solstone-linux run' to start, or 'solstone-linux install-service' for systemd."
     )
+    return 0
+
+
+def cmd_settings(args: argparse.Namespace) -> int:
+    config = load_config()
+    config.capture_framerate = _prompt_framerate(config.capture_framerate)
+    config.draw_cursor = _prompt_bool("Draw cursor", config.draw_cursor)
+    config.start_paused = _prompt_bool("Start paused", config.start_paused)
+    config.segment_interval = _prompt_positive_int(
+        "Segment interval seconds", config.segment_interval
+    )
+    config.chat_bridge_enabled = _prompt_bool(
+        "Chat bridge enabled", config.chat_bridge_enabled
+    )
+    config.cache_retention_days = _prompt_retention(config.cache_retention_days)
+    save_config(config)
+    print(f"\nSettings saved to {config.config_path}")
     return 0
 
 
@@ -440,6 +515,9 @@ def main() -> None:
         help="Verify install prerequisites",
     )
 
+    # settings
+    subparsers.add_parser("settings", help="Edit capture/behavior settings")
+
     # install-service
     subparsers.add_parser("install-service", help="Install systemd user service")
 
@@ -456,6 +534,7 @@ def main() -> None:
         "run": cmd_run,
         "setup": cmd_setup,
         "doctor": cmd_doctor,
+        "settings": cmd_settings,
         "install-service": cmd_install_service,
         "status": cmd_status,
     }

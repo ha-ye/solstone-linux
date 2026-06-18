@@ -3,9 +3,9 @@
 
 """Configuration loading and persistence for solstone-linux.
 
-Config lives at ~/.local/share/solstone-linux/config/config.json.
+Config lives at ~/.config/solstone-linux/config.json.
 Captures go to ~/.local/share/solstone-linux/captures/.
-Screencast restore token at ~/.local/share/solstone-linux/config/restore_token.
+Screencast restore token at ~/.config/solstone-linux/restore_token.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,15 @@ DEFAULT_SEGMENT_INTERVAL = 300
 DEFAULT_SYNC_RETRY_DELAYS = [5, 30, 120, 300]
 DEFAULT_SYNC_MAX_RETRIES = 10
 DEFAULT_SYNC_STALE_THRESHOLD = 600
+
+
+def _default_config_dir() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        base = Path(xdg)
+        if base.is_absolute():
+            return base / "solstone-linux"
+    return Path.home() / ".config" / "solstone-linux"
 
 
 @dataclass
@@ -46,14 +56,11 @@ class Config:
     draw_cursor: bool = True
     start_paused: bool = False
     base_dir: Path = DEFAULT_BASE_DIR
+    config_dir: Path = field(default_factory=_default_config_dir)
 
     @property
     def captures_dir(self) -> Path:
         return self.base_dir / "captures"
-
-    @property
-    def config_dir(self) -> Path:
-        return self.base_dir / "config"
 
     @property
     def state_dir(self) -> Path:
@@ -74,11 +81,45 @@ class Config:
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
 
-def load_config(base_dir: Path | None = None) -> Config:
+def _migrate_legacy_config(config: Config) -> None:
+    old_dir = config.base_dir / "config"
+    if config.config_dir == old_dir:
+        return
+    if config.config_path.exists():
+        return
+    old_config = old_dir / "config.json"
+    if not old_config.exists():
+        return
+    try:
+        config.config_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old_config, config.config_path)
+        os.chmod(config.config_path, stat.S_IRUSR | stat.S_IWUSR)
+        old_token = old_dir / "restore_token"
+        if old_token.exists():
+            shutil.copy2(old_token, config.restore_token_path)
+        logger.info(f"Migrated config to {config.config_dir}")
+    except OSError as e:
+        logger.warning(f"Config migration failed: {e}")
+        return
+    for p in (old_config, old_dir / "restore_token"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    try:
+        old_dir.rmdir()
+    except OSError:
+        pass
+
+
+def load_config(base_dir: Path | None = None, config_dir: Path | None = None) -> Config:
     """Load config from disk, returning defaults if not found."""
     config = Config()
     if base_dir:
         config.base_dir = base_dir
+    if config_dir:
+        config.config_dir = config_dir
+    _migrate_legacy_config(config)
 
     config_path = config.config_path
     if not config_path.exists():

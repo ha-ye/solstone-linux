@@ -28,6 +28,7 @@ def _make_app(tmp_path=None):
     config = Config()
     if tmp_path:
         config.base_dir = tmp_path
+        config.config_dir = tmp_path / "config"
     config.server_url = "https://test.example.com"
     observer = MagicMock()
     observer.config = config

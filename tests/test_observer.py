@@ -39,8 +39,8 @@ class TestSegmentDirStructure:
 
     def test_restore_token_path(self, tmp_path: Path):
         config = Config(base_dir=tmp_path)
+        assert config.restore_token_path == config.config_dir / "restore_token"
         assert str(config.restore_token_path).endswith("restore_token")
-        assert "config" in str(config.restore_token_path)
 
 
 class TestPauseResumeState:

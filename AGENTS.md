@@ -13,9 +13,9 @@ This is **not** part of the solstone monorepo. It is a standalone package with i
 ```
 src/solstone_linux/
     __init__.py             Package version
-    cli.py                  CLI entry point (run, setup, install-service, status)
+    cli.py                  CLI entry point (run, setup, settings, install-service, status)
     solstone-linux.service.in        Systemd unit template (rendered by install-service)
-    config.py               Config loading/persistence (~/.local/share/solstone-linux/)
+    config.py               Config loading/persistence (config under ~/.config/solstone-linux/)
     observer.py             Main capture loop — state machine (idle/screencast), audio + video
     screencast.py           Portal-based multi-monitor recording (xdg-desktop-portal + GStreamer)
     audio_recorder.py       Stereo audio recording (mic + system via soundcard)
@@ -126,10 +126,10 @@ Python packages (in pyproject.toml):
 
 ## Data Paths
 
-- Config: `~/.local/share/solstone-linux/config/config.json`
+- Config: `~/.config/solstone-linux/config.json`
 - Captures: `~/.local/share/solstone-linux/captures/`
 - State: `~/.local/share/solstone-linux/state/`
-- Restore token: `~/.local/share/solstone-linux/config/restore_token`
+- Restore token: `~/.config/solstone-linux/restore_token`
 - Install source marker: `~/.config/solstone-linux/.install-source` (tracks which repo clone owns the pipx install)
 
 ## Key Patterns
