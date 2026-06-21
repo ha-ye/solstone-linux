@@ -373,6 +373,49 @@ async def test_check_portal_tolerates_hyphenated_portal_properties(monkeypatch):
     )
 
 
+class TestCheckPipewire:
+    def test_pactl_missing_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+
+        result = doctor.check_pipewire()
+
+        assert result.severity == "fail"
+        assert "pactl missing" in result.detail
+
+    def test_pactl_server_not_running_warns(self, monkeypatch):
+        import subprocess as _sp
+
+        monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/pactl")
+        completed = _sp.CompletedProcess(
+            [], returncode=1, stdout="", stderr="Connection failure: Connection refused"
+        )
+        monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **kw: completed)
+
+        result = doctor.check_pipewire()
+
+        assert result.severity == "warn"
+        assert "audio server not running" in result.detail
+        assert "Connection refused" in result.detail
+
+    def test_pactl_ok(self, monkeypatch):
+        import subprocess as _sp
+
+        monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/pactl")
+        completed = _sp.CompletedProcess(
+            [], returncode=0, stdout="Server String: /run/user/1000/pulse/native", stderr=""
+        )
+        monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **kw: completed)
+
+        result = doctor.check_pipewire()
+
+        assert result.severity == "ok"
+        assert "Server String" in result.detail
+
+
 class TestCheckX11Capture:
     def test_wayland_session_not_applicable(self, monkeypatch):
         monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")

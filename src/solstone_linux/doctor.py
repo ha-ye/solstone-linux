@@ -116,8 +116,8 @@ def check_pipewire() -> CheckResult:
             "pactl missing; install pipewire-pulse or pulseaudio-utils",
         )
     if result.returncode != 0:
-        detail = result.stderr.strip().splitlines()[0] if result.stderr.strip() else ""
-        return CheckResult("pipewire (pactl)", "fail", detail)
+        detail = result.stderr.strip().splitlines()[0] if result.stderr.strip() else "pactl info failed"
+        return CheckResult("pipewire (pactl)", "warn", f"audio server not running: {detail}")
     detail = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
     return CheckResult("pipewire (pactl)", "ok", detail)
 
