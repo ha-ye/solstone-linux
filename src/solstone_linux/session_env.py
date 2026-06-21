@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,28 @@ def check_session_ready() -> str | None:
     if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
         return "no DBus session bus (DBUS_SESSION_BUS_ADDRESS not set)"
 
-    # PulseAudio / PipeWire audio
+    # PulseAudio / PipeWire audio — retry to handle delayed startup on X11 desktops
     pactl = shutil.which("pactl")
     if pactl:
-        try:
-            subprocess.run(
-                [pactl, "info"],
-                capture_output=True,
-                timeout=5,
-            ).check_returncode()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return "audio server not responding (pactl info failed)"
+        _RETRIES = 3
+        _RETRY_DELAY = 5  # seconds
+        for attempt in range(_RETRIES):
+            try:
+                subprocess.run(
+                    [pactl, "info"],
+                    capture_output=True,
+                    timeout=5,
+                ).check_returncode()
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                if attempt < _RETRIES - 1:
+                    logger.info(
+                        "Audio server not ready (attempt %d/%d), retrying in %ds",
+                        attempt + 1,
+                        _RETRIES,
+                        _RETRY_DELAY,
+                    )
+                    time.sleep(_RETRY_DELAY)
+                else:
+                    return "audio server not responding (pactl info failed)"
     return None

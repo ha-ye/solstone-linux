@@ -320,7 +320,7 @@ def cmd_install_service(args: argparse.Namespace) -> int:
         "Name=Solstone Observer\n"
         "Comment=Experience screen and audio with your solstone journal\n"
         "Exec=/bin/sh -c 'systemctl --user import-environment"
-        " DISPLAY XAUTHORITY XDG_SESSION_TYPE 2>/dev/null;"
+        " DISPLAY XAUTHORITY XDG_SESSION_TYPE DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR 2>/dev/null;"
         " systemctl --user start solstone-linux.service'\n"
         "StartupNotify=false\n"
         "X-GNOME-Autostart-enabled=true\n"
